@@ -1,14 +1,6 @@
 export const _CACHE_ENABLED = false; //change it to true and setup your upstash so you can cache your data
 
-const IS_LOCAL_NODE = (() => {
-  try {
-    return (
-      typeof process !== "undefined" &&
-      typeof process.versions?.node === "string" &&
-      !process.env.VERCEL
-    );
-  } catch { return false; }
-})();
+const IS_LOCAL_NODE = false;
 
 const UPSTASH_REDIS_REST_URL = "YOUR_UPSTASH_REDIS_REST_URL"; //get it from upstash.com 
 const UPSTASH_REDIS_REST_TOKEN = "YOUR_UPSTASH_REDIS_REST_TOKEN";
@@ -51,35 +43,7 @@ let diskRead  = () => null;
 let diskWrite = () => {};
 let diskDel   = () => {};
 
-if (IS_LOCAL_NODE) {
-  const { readFileSync, mkdirSync, existsSync } = await import("node:fs");
-  const { writeFile, unlink }                   = await import("node:fs/promises");
-  const { join, dirname }                        = await import("node:path");
-  const { fileURLToPath }                        = await import("node:url");
 
-  const __dir    = dirname(fileURLToPath(import.meta.url));
-  const CACHE_DIR = join(__dir, ".cache");
-  try { mkdirSync(CACHE_DIR, { recursive: true }); } catch {}
-
-  const keyToPath = (key) =>
-    join(CACHE_DIR, key.replace(/[^a-zA-Z0-9_-]/g, "_") + ".json");
-
-  diskRead = (key) => {
-    try {
-      const p = keyToPath(key);
-      if (!existsSync(p)) return null;
-      return decodeEntry(readFileSync(p, "utf8"));
-    } catch { return null; }
-  };
-
-  diskWrite = (key, entry) => {
-    writeFile(keyToPath(key), encodeEntry(entry)).catch(() => {});
-  };
-
-  diskDel = (key) => {
-    unlink(keyToPath(key)).catch(() => {});
-  };
-}
 
 const MAX_MEM = 800;
 const mem     = new Map();

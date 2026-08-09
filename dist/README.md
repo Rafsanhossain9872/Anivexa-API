@@ -1,0 +1,1 @@
+This folder contains the built output assets for the worker "anivexa-api" generated at 2026-08-09T13:29:53.998Z.

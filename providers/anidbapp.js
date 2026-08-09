@@ -9,14 +9,9 @@ import {
   stripTags,
 } from "../core/new-provider-utils.js";
 import { get, set, isFresh, SHOW_IDENTITY_TTL } from "../core/smartcache.js";
-import { execFile } from "child_process";
-import { promisify } from "util";
-
-const execFileAsync = promisify(execFile);
 
 const BASE = "https://anidb.app";
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
-const COOKIE_JAR = "/tmp/anidbapp_cookies.txt";
 
 const NAV_HEADERS = [
   "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
@@ -43,28 +38,31 @@ const XHR_HEADERS = [
   "X-Requested-With: XMLHttpRequest",
 ];
 
-async function curlFetch(url, headers, extraArgs = []) {
-  const args = [
-    "-s",
-    "--compressed",
-    "-A", UA,
-    "-c", COOKIE_JAR,
-    "-b", COOKIE_JAR,
-    "-w", "\n__STATUS:%{http_code}",
-    ...headers.flatMap(h => ["-H", h]),
-    ...extraArgs,
-    url,
-  ];
-  const { stdout } = await execFileAsync("curl", args, { maxBuffer: 8 * 1024 * 1024 });
-  const sep = stdout.lastIndexOf("\n__STATUS:");
-  const status = sep >= 0 ? Number(stdout.slice(sep + 10)) : 0;
-  const body = sep >= 0 ? stdout.slice(0, sep) : stdout;
-  if (status < 200 || status >= 300) {
-    const err = new Error(`HTTP ${status} fetching ${url}`);
-    err.rawBody = body;
+let cookieStore = "";
+
+async function curlFetch(url, headersArray, extraArgs = []) {
+  const headers = new Headers();
+  headers.set("User-Agent", UA);
+  if (cookieStore) headers.set("Cookie", cookieStore);
+  
+  for (const h of headersArray) {
+    const split = h.indexOf(":");
+    if (split > 0) {
+      headers.set(h.slice(0, split).trim(), h.slice(split + 1).trim());
+    }
+  }
+
+  const res = await fetch(url, { headers });
+  
+  const setCookie = res.headers.get("set-cookie");
+  if (setCookie) cookieStore = setCookie;
+  
+  if (!res.ok) {
+    const err = new Error(`HTTP ${res.status} fetching ${url}`);
+    err.rawBody = await res.text();
     throw err;
   }
-  return body;
+  return await res.text();
 }
 
 async function fetchAnidbHtml(url, referer) {
