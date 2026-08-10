@@ -426,13 +426,15 @@ app.get('/api/watch/:anilistId/:lang/:ep', async (c) => {
   const audio = lang === "dub" ? "dub" : "sub";
   const episodeKey = `ep_${ep}`;
 
-  // Check cache first
-  const cacheKey = `apiwatch:${anilistId}:${audio}:${ep}`;
-  const cached = await getAsync(cacheKey);
-  if (cached && isFresh(cached)) {
-    c.header("Cache-Control", "public, max-age=300");
-    return c.json(cached.data);
-  }
+  // Stream URL cache DISABLED: flixcloud tokens are IP-locked and time-limited.
+  // Serving a cached token causes 403 errors when the token expires or the
+  // Worker edge node IP rotates. Always fetch a fresh stream URL.
+  // const cacheKey = `apiwatch:${anilistId}:${audio}:${ep}`;
+  // const cached = await getAsync(cacheKey);
+  // if (cached && isFresh(cached)) {
+  //   c.header("Cache-Control", "public, max-age=300");
+  //   return c.json(cached.data);
+  // }
 
   // Sequential fallback chain: reanime → anikoto → allmanga → anineko → 2dhive → animenosub → anizone
   const providers = [
@@ -490,10 +492,10 @@ app.get('/api/watch/:anilistId/:lang/:ep', async (c) => {
 
       const result = { [episodeKey]: normalized };
 
-      // Cache successful result
-      await setAsync(cacheKey, result, WATCH_TTL).catch(() => {});
+      // Cache disabled — see comment above
+      // await setAsync(cacheKey, result, WATCH_TTL).catch(() => {});
 
-      c.header("Cache-Control", "public, max-age=300");
+      c.header("Cache-Control", "no-store");
       c.header("X-Provider", provider.name);
       return c.json(result);
     } catch {
