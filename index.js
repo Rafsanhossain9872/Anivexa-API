@@ -242,6 +242,10 @@ function normalizeReanime(rawRes) {
   let intro = { start: 0, end: 0 };
   let outro = { start: 0, end: 0 };
 
+  // Include redirect_url (Worker /stream endpoint that 302s to the raw stream)
+  if (data.redirect_url) {
+    streams.push({ type: "hls", url: data.redirect_url });
+  }
   // Primary HLS from stream_url
   if (data.stream_url) {
     streams.push({ type: "hls", url: data.stream_url });
@@ -249,8 +253,16 @@ function normalizeReanime(rawRes) {
   // Additional streams array
   if (Array.isArray(data.streams)) {
     for (const s of data.streams) {
-      if (s.url && s.type === "hls" && !streams.find(x => x.url === s.url)) {
-        streams.push({ type: "hls", url: s.url });
+      if (s.url && !streams.find(x => x.url === s.url)) {
+        streams.push({ type: s.type || "hls", url: s.url });
+      }
+    }
+  }
+  // Include embed URLs from allServers (flixcloud embed pages with built-in decryption player)
+  if (Array.isArray(data.allServers)) {
+    for (const s of data.allServers) {
+      if (s.embed && !streams.find(x => x.url === s.embed)) {
+        streams.push({ type: "embed", url: s.embed, server: s.name });
       }
     }
   }
@@ -506,16 +518,15 @@ app.get('/api/watch/:anilistId/:lang/:ep', async (c) => {
   return c.json({ error: "No streams found from any provider", anilistId, episode: ep, audio }, 404);
 });
 
-// HLS streaming endpoint: resolves stream URL + proxies M3U8 in ONE request
-// This ensures the same Cloudflare edge node (same IP) both generates and uses the
-// flixcloud token, avoiding IP mismatch 403 errors.
+// HLS streaming endpoint: resolves stream URL + proxies M3U8 in ONE request.
+// Follows the flixcloud M3U8 chain: master.m3u8 returns an encrypted path,
+// which must be resolved to get the actual variant playlist with #EXTM3U tags.
 app.get('/api/hls/:anilistId/:lang/:ep', async (c) => {
   const anilistId = c.req.param('anilistId');
   const lang = c.req.param('lang');
   const ep = c.req.param('ep');
   const audio = lang === "dub" ? "dub" : "sub";
 
-  // Resolve stream URL from providers (same request = same edge node = same IP)
   const providers = [
     { name: "reanime", handler: reanimeHandler, path: `/watch/${anilistId}/${audio}/${ep}`, normalize: normalizeReanime },
     { name: "anikoto", handler: anikotoHandler, path: `/watch/anikoto/${anilistId}/${audio}/anikoto-${ep}`, normalize: normalizeAnikoto },
@@ -535,8 +546,6 @@ app.get('/api/hls/:anilistId/:lang/:ep', async (c) => {
       if (!rawData || rawData.error) continue;
       const normalized = provider.normalize(rawData);
       if (!normalized || normalized.streams.length === 0) continue;
-
-      // Find first HLS stream
       const hlsStream = normalized.streams.find(s => s.type === 'hls' || (s.url && s.url.includes('.m3u8')));
       if (hlsStream) {
         streamUrl = hlsStream.url;
@@ -550,65 +559,94 @@ app.get('/api/hls/:anilistId/:lang/:ep', async (c) => {
     return c.json({ error: "No HLS streams found" }, 404);
   }
 
-  // Now proxy the M3U8 from the SAME edge node that generated the token
-  const headers = new Headers();
-  headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-  headers.set('Accept', '*/*');
-  headers.set('Accept-Language', 'en-US,en;q=0.9');
-  headers.set('Sec-Fetch-Dest', 'empty');
-  headers.set('Sec-Fetch-Mode', 'cors');
-  headers.set('Sec-Fetch-Site', 'cross-site');
+  const makeHeaders = () => {
+    const h = new Headers();
+    h.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    h.set('Accept', '*/*');
+    h.set('Accept-Language', 'en-US,en;q=0.9');
+    let targetOrigin = '';
+    try { targetOrigin = new URL(streamUrl).origin; } catch(e) {}
+    if (referer) {
+      h.set('Referer', referer);
+      try { h.set('Origin', new URL(referer).origin); } catch(e) {}
+    } else if (targetOrigin) {
+      h.set('Referer', targetOrigin + '/');
+      h.set('Origin', targetOrigin);
+    }
+    return h;
+  };
 
-  let targetOrigin = '';
-  try { targetOrigin = new URL(streamUrl).origin; } catch(e) {}
-
-  if (referer) {
-    headers.set('Referer', referer);
-    try { headers.set('Origin', new URL(referer).origin); } catch(e) {}
-  } else if (targetOrigin) {
-    headers.set('Referer', targetOrigin + '/');
-    headers.set('Origin', targetOrigin);
-  }
+  const corsHeaders = { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
 
   try {
-    const response = await fetch(streamUrl, { headers });
-    const responseHeaders = new Headers();
-    responseHeaders.set('Access-Control-Allow-Origin', '*');
-    responseHeaders.set('Content-Type', 'application/vnd.apple.mpegurl');
-    responseHeaders.set('Cache-Control', 'no-store');
+    // Step 1: Fetch the master.m3u8 (may return encrypted path instead of standard M3U8)
+    let currentUrl = streamUrl;
+    let bodyText = '';
+    const MAX_FOLLOWS = 5;
 
-    if (!response.ok) {
-      return new Response(await response.text(), { status: response.status, headers: responseHeaders });
-    }
-
-    let bodyText = await response.text();
-    const baseUrl = new URL(streamUrl);
-    const reqUrl = new URL(c.req.url);
-    const proxyBase = `${reqUrl.protocol}//${reqUrl.host}/api/proxy`;
-
-    bodyText = bodyText.split('\n').map(line => {
-      let trimmed = line.trim();
-      if (!trimmed) return line;
-
-      if (trimmed.startsWith('#') && trimmed.includes('URI=')) {
-        return trimmed.replace(/URI="([^"]+)"/, (match, p1) => {
-          try {
-            const absUrl = new URL(p1, baseUrl).toString();
-            return `URI="${proxyBase}?url=${encodeURIComponent(absUrl)}&referer=${encodeURIComponent(referer || '')}"`;
-          } catch (e) { return match; }
+    for (let i = 0; i < MAX_FOLLOWS; i++) {
+      const resp = await fetch(currentUrl, { headers: makeHeaders() });
+      if (!resp.ok) {
+        return new Response(await resp.text(), {
+          status: resp.status,
+          headers: { 'Content-Type': 'text/plain', ...corsHeaders }
         });
       }
 
-      if (!trimmed.startsWith('#')) {
-        try {
-          const absUrl = new URL(trimmed, baseUrl).toString();
-          return `${proxyBase}?url=${encodeURIComponent(absUrl)}&referer=${encodeURIComponent(referer || '')}`;
-        } catch (e) { return trimmed; }
-      }
-      return trimmed;
-    }).join('\n');
+      bodyText = await resp.text();
 
-    return new Response(bodyText, { status: 200, headers: responseHeaders });
+      // If it's a valid M3U8 (has #EXTM3U), we're done following the chain
+      if (bodyText.trim().startsWith('#EXTM3U')) {
+        // Rewrite URLs in the M3U8 to go through our proxy
+        const baseUrl = new URL(currentUrl);
+        const reqUrl = new URL(c.req.url);
+        const proxyBase = `${reqUrl.protocol}//${reqUrl.host}/api/proxy`;
+        const ref = encodeURIComponent(referer || '');
+
+        bodyText = bodyText.split('\n').map(line => {
+          let trimmed = line.trim();
+          if (!trimmed) return line;
+
+          if (trimmed.startsWith('#') && trimmed.includes('URI=')) {
+            return trimmed.replace(/URI="([^"]+)"/, (match, p1) => {
+              try {
+                const absUrl = new URL(p1, baseUrl).toString();
+                return `URI="${proxyBase}?url=${encodeURIComponent(absUrl)}&referer=${ref}"`;
+              } catch (e) { return match; }
+            });
+          }
+
+          if (!trimmed.startsWith('#')) {
+            try {
+              const absUrl = new URL(trimmed, baseUrl).toString();
+              return `${proxyBase}?url=${encodeURIComponent(absUrl)}&referer=${ref}`;
+            } catch (e) { return trimmed; }
+          }
+          return trimmed;
+        }).join('\n');
+
+        return new Response(bodyText, {
+          status: 200,
+          headers: { 'Content-Type': 'application/vnd.apple.mpegurl', ...corsHeaders }
+        });
+      }
+
+      // Not a standard M3U8 — treat body as a relative path and follow it
+      const nextPath = bodyText.trim().split('\n')[0].trim();
+      if (!nextPath) break;
+
+      try {
+        currentUrl = new URL(nextPath, new URL(currentUrl)).toString();
+      } catch {
+        break;
+      }
+    }
+
+    // If we exhausted follows without finding valid M3U8, return what we have
+    return new Response(bodyText, {
+      status: 200,
+      headers: { 'Content-Type': 'application/vnd.apple.mpegurl', ...corsHeaders }
+    });
   } catch (e) {
     return c.json({ error: e.message }, 500);
   }
