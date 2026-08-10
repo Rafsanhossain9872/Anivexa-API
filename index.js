@@ -506,6 +506,114 @@ app.get('/api/watch/:anilistId/:lang/:ep', async (c) => {
   return c.json({ error: "No streams found from any provider", anilistId, episode: ep, audio }, 404);
 });
 
+// HLS streaming endpoint: resolves stream URL + proxies M3U8 in ONE request
+// This ensures the same Cloudflare edge node (same IP) both generates and uses the
+// flixcloud token, avoiding IP mismatch 403 errors.
+app.get('/api/hls/:anilistId/:lang/:ep', async (c) => {
+  const anilistId = c.req.param('anilistId');
+  const lang = c.req.param('lang');
+  const ep = c.req.param('ep');
+  const audio = lang === "dub" ? "dub" : "sub";
+
+  // Resolve stream URL from providers (same request = same edge node = same IP)
+  const providers = [
+    { name: "reanime", handler: reanimeHandler, path: `/watch/${anilistId}/${audio}/${ep}`, normalize: normalizeReanime },
+    { name: "anikoto", handler: anikotoHandler, path: `/watch/anikoto/${anilistId}/${audio}/anikoto-${ep}`, normalize: normalizeAnikoto },
+    { name: "allmanga", handler: mangaHandler, path: `/watch/allmanga/${anilistId}/${audio}/allmanga-${ep}`, normalize: normalizeAllmanga },
+    { name: "anineko", handler: aninekoHandler, path: `/watch/anineko/${anilistId}/${audio}/anineko-${ep}`, normalize: normalizeAnineko },
+    { name: "2dhive", handler: dhiveHandler, path: `/watch/2dhive/${anilistId}/${audio}/2dhive-${ep}`, normalize: normalize2dhive },
+    { name: "animenosub", handler: animenosubHandler, path: `/watch/animenosub/${anilistId}/${audio}/animenosub-${ep}`, normalize: normalizeAnimenosub },
+    { name: "anizone", handler: anizoneHandler, path: `/watch/anizone/${anilistId}/${audio}/anizone-${ep}`, normalize: normalizeAnizone },
+  ];
+
+  let streamUrl = null;
+  let referer = '';
+
+  for (const provider of providers) {
+    try {
+      const rawData = await tryProvider(provider.handler, provider.path);
+      if (!rawData || rawData.error) continue;
+      const normalized = provider.normalize(rawData);
+      if (!normalized || normalized.streams.length === 0) continue;
+
+      // Find first HLS stream
+      const hlsStream = normalized.streams.find(s => s.type === 'hls' || (s.url && s.url.includes('.m3u8')));
+      if (hlsStream) {
+        streamUrl = hlsStream.url;
+        referer = hlsStream.referer || '';
+        break;
+      }
+    } catch { continue; }
+  }
+
+  if (!streamUrl) {
+    return c.json({ error: "No HLS streams found" }, 404);
+  }
+
+  // Now proxy the M3U8 from the SAME edge node that generated the token
+  const headers = new Headers();
+  headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+  headers.set('Accept', '*/*');
+  headers.set('Accept-Language', 'en-US,en;q=0.9');
+  headers.set('Sec-Fetch-Dest', 'empty');
+  headers.set('Sec-Fetch-Mode', 'cors');
+  headers.set('Sec-Fetch-Site', 'cross-site');
+
+  let targetOrigin = '';
+  try { targetOrigin = new URL(streamUrl).origin; } catch(e) {}
+
+  if (referer) {
+    headers.set('Referer', referer);
+    try { headers.set('Origin', new URL(referer).origin); } catch(e) {}
+  } else if (targetOrigin) {
+    headers.set('Referer', targetOrigin + '/');
+    headers.set('Origin', targetOrigin);
+  }
+
+  try {
+    const response = await fetch(streamUrl, { headers });
+    const responseHeaders = new Headers();
+    responseHeaders.set('Access-Control-Allow-Origin', '*');
+    responseHeaders.set('Content-Type', 'application/vnd.apple.mpegurl');
+    responseHeaders.set('Cache-Control', 'no-store');
+
+    if (!response.ok) {
+      return new Response(await response.text(), { status: response.status, headers: responseHeaders });
+    }
+
+    let bodyText = await response.text();
+    const baseUrl = new URL(streamUrl);
+    const reqUrl = new URL(c.req.url);
+    const proxyBase = `${reqUrl.protocol}//${reqUrl.host}/api/proxy`;
+
+    bodyText = bodyText.split('\n').map(line => {
+      let trimmed = line.trim();
+      if (!trimmed) return line;
+
+      if (trimmed.startsWith('#') && trimmed.includes('URI=')) {
+        return trimmed.replace(/URI="([^"]+)"/, (match, p1) => {
+          try {
+            const absUrl = new URL(p1, baseUrl).toString();
+            return `URI="${proxyBase}?url=${encodeURIComponent(absUrl)}&referer=${encodeURIComponent(referer || '')}"`;
+          } catch (e) { return match; }
+        });
+      }
+
+      if (!trimmed.startsWith('#')) {
+        try {
+          const absUrl = new URL(trimmed, baseUrl).toString();
+          return `${proxyBase}?url=${encodeURIComponent(absUrl)}&referer=${encodeURIComponent(referer || '')}`;
+        } catch (e) { return trimmed; }
+      }
+      return trimmed;
+    }).join('\n');
+
+    return new Response(bodyText, { status: 200, headers: responseHeaders });
+  } catch (e) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
 app.get('/api/proxy', async (c) => {
   const url = c.req.query('url');
   const referer = c.req.query('referer');
