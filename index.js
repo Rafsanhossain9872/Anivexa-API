@@ -537,6 +537,50 @@ app.get('/api/proxy', async (c) => {
     // Remove strict CORS headers from target if they exist
     responseHeaders.delete('Access-Control-Allow-Credentials');
     
+    const contentType = responseHeaders.get('content-type') || '';
+    if (contentType.includes('mpegurl') || contentType.includes('mpegURL') || url.includes('.m3u8')) {
+      let bodyText = await response.text();
+      const baseUrl = new URL(url);
+      const reqUrl = new URL(c.req.url);
+      const proxyBase = `${reqUrl.protocol}//${reqUrl.host}/api/proxy`;
+
+      bodyText = bodyText.split('\n').map(line => {
+        let trimmed = line.trim();
+        if (!trimmed) return line;
+
+        // Handle tags with URIs, e.g. #EXT-X-KEY:METHOD=AES-128,URI="key.bin"
+        if (trimmed.startsWith('#') && trimmed.includes('URI=')) {
+          return trimmed.replace(/URI="([^"]+)"/, (match, p1) => {
+            try {
+              const absUrl = new URL(p1, baseUrl).toString();
+              const proxyUrl = `${proxyBase}?url=${encodeURIComponent(absUrl)}&referer=${encodeURIComponent(referer || '')}`;
+              return `URI="${proxyUrl}"`;
+            } catch (e) {
+              return match;
+            }
+          });
+        }
+
+        // Handle playlist/segment URIs
+        if (!trimmed.startsWith('#')) {
+          try {
+            const absUrl = new URL(trimmed, baseUrl).toString();
+            const proxyUrl = `${proxyBase}?url=${encodeURIComponent(absUrl)}&referer=${encodeURIComponent(referer || '')}`;
+            return proxyUrl;
+          } catch (e) {
+            return trimmed;
+          }
+        }
+
+        return trimmed;
+      }).join('\n');
+
+      return new Response(bodyText, {
+        status: response.status,
+        headers: responseHeaders
+      });
+    }
+
     return new Response(response.body, {
       status: response.status,
       headers: responseHeaders
