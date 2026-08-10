@@ -3593,15 +3593,15 @@ function buildSearchQueries(title) {
   return [...queries].filter((q) => q.length >= 3);
 }
 __name(buildSearchQueries, "buildSearchQueries");
-async function findTopSlugs(titles, searchFn3, n = 6) {
+async function findTopSlugs(titles, searchFn2, n = 6) {
   const allCandidates = /* @__PURE__ */ new Map();
-  const searchQueries2 = /* @__PURE__ */ new Set();
+  const searchQueries = /* @__PURE__ */ new Set();
   for (const title of titles.slice(0, 4)) {
-    for (const q of buildSearchQueries(title)) searchQueries2.add(q);
+    for (const q of buildSearchQueries(title)) searchQueries.add(q);
   }
-  await Promise.all([...searchQueries2].map(async (q) => {
+  await Promise.all([...searchQueries].map(async (q) => {
     try {
-      const results = await searchFn3(q);
+      const results = await searchFn2(q);
       for (const r of results) if (!allCandidates.has(r.slug)) allCandidates.set(r.slug, r.text);
     } catch {
     }
@@ -3685,9 +3685,9 @@ function episodeMeta(n, ctx) {
   };
 }
 __name(episodeMeta, "episodeMeta");
-function selectSeries(candidates, scrapeSeries5, expected, status, offset, options = {}) {
+function selectSeries(candidates, scrapeSeries4, expected, status, offset, options = {}) {
   return Promise.all(candidates.map(async (candidate) => {
-    const episodes = await scrapeSeries5(candidate.slug);
+    const episodes = await scrapeSeries4(candidate.slug);
     const max = Math.max(0, ...episodes.map((e) => e.number));
     const localHits = expected ? episodes.filter((e) => e.number >= 1 && e.number <= expected).length : episodes.length;
     const offsetHits = expected && offset ? episodes.filter((e) => e.number > offset && e.number <= offset + expected).length : 0;
@@ -5005,225 +5005,10 @@ var anikoto_default = {
   }
 };
 
-// providers/animegg.js
-var BASE2 = "https://www.animegg.org";
-async function search(query) {
-  const html = await fetchHtml(`${BASE2}/search/?q=${encodeURIComponent(query)}`);
-  const results = [];
-  for (const m of html.matchAll(/<a\b[^>]*class=["'][^"']*\bmse\b[^"']*["'][^>]*>[\s\S]*?<\/a>/gi)) {
-    const tag = m[0].match(/<a\b[^>]*>/i)?.[0] ?? "";
-    const href = attr(tag, "href");
-    const slug = href.match(/^\/series\/([^/?#]+)/)?.[1];
-    if (!slug) continue;
-    const strong = m[0].match(/<strong[^>]*>([\s\S]*?)<\/strong>/i)?.[1];
-    results.push({ slug, text: strong ? stripTags(strong) : slug.replace(/-/g, " ") });
-  }
-  return results;
-}
-__name(search, "search");
-async function scrapeSeries(slug) {
-  const html = await fetchHtml(`${BASE2}/series/${slug}`);
-  const episodes = [];
-  for (const m of html.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)) {
-    const block = m[1];
-    if (!/\banm_det_pop\b/.test(block)) continue;
-    const link = block.match(/<a\b[^>]*class=["'][^"']*anm_det_pop[^"']*["'][^>]*>/i)?.[0] ?? "";
-    const href = attr(link, "href").replace(/#.*$/, "").replace(/^\//, "");
-    const strong = stripTags(block.match(/<strong[^>]*>([\s\S]*?)<\/strong>/i)?.[1] ?? "");
-    const rangeMatch = strong.match(/(\d+)-(\d+)\s*$/);
-    const numMatch = rangeMatch || strong.match(/(\d+)\s*$/);
-    if (!numMatch || !href) continue;
-    const number = parseInt(numMatch[1]);
-    const title = stripTags(block.match(/<i\b[^>]*class=["'][^"']*anititle[^"']*["'][^>]*>([\s\S]*?)<\/i>/i)?.[1] ?? "") || strong;
-    const audio = [];
-    if (/\bbtn-subbed\b/.test(block)) audio.push("sub");
-    if (/\bbtn-dubbed\b/.test(block)) audio.push("dub");
-    episodes.push({ number, title, epSlug: href, hasSub: audio.includes("sub"), hasDub: audio.includes("dub") });
-  }
-  episodes.sort((a, b) => a.number - b.number);
-  const seen = /* @__PURE__ */ new Set();
-  return episodes.filter((e) => seen.has(e.number) ? false : (seen.add(e.number), true));
-}
-__name(scrapeSeries, "scrapeSeries");
-async function scrapeEmbed(embedId) {
-  const html = await fetchHtml(`${BASE2}/embed/${embedId}`, { Referer: BASE2 });
-  const m = html.match(/var\s+videoSources\s*=\s*(\[[\s\S]*?\]);/);
-  if (!m) return [];
-  let parsed = [];
-  try {
-    const asJson = m[1].replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":').replace(/:\s*'([^']*)'/g, ': "$1"');
-    parsed = JSON.parse(asJson);
-  } catch {
-    return [];
-  }
-  return parsed.map((s) => {
-    let backup = null;
-    if (s.bk) {
-      try {
-        backup = decodeURIComponent(atob(s.bk));
-      } catch {
-        backup = null;
-      }
-    }
-    return {
-      quality: s.label || "unknown",
-      url: s.file ? s.file.startsWith("http") ? s.file : `${BASE2}${s.file}` : "",
-      backup
-    };
-  }).filter((s) => s.url);
-}
-__name(scrapeEmbed, "scrapeEmbed");
-async function scrapeEpisodeWatch(epSlug, audio) {
-  const html = await fetchHtml(`${BASE2}/${epSlug}`, { Referer: BASE2 });
-  const title = stripTags(html.match(/<div\b[^>]*class=["'][^"']*info[^"']*["'][^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i)?.[1] ?? "");
-  const tabs = [];
-  for (const m of html.matchAll(/<a\b[^>]*data-toggle=["']tab["'][^>]*>/gi)) {
-    const tag = m[0];
-    const embedId = attr(tag, "data-id");
-    const server = attr(tag, "data-mirror") || "AnimeGG";
-    const version = attr(tag, "data-version") || "subbed";
-    if (!embedId) continue;
-    const normalized = version.startsWith("dub") ? "dub" : "sub";
-    if (audio === "all" || normalized === audio) {
-      tabs.push({ embedId, embedUrl: `${BASE2}/embed/${embedId}`, server, normalized });
-    }
-  }
-  const results = await Promise.allSettled(tabs.map(async (tab, i) => {
-    const sources = await scrapeEmbed(tab.embedId);
-    const streams = sources.map((s, j) => ({
-      url: s.url,
-      type: s.url.includes(".m3u8") ? "hls" : "mp4",
-      quality: s.quality,
-      backup: s.backup,
-      audio: tab.normalized,
-      server: tab.server,
-      embed: tab.embedUrl,
-      referer: `${new URL(tab.embedUrl).origin}/`,
-      priority: tabs.length - i,
-      isActive: i === 0 && j === 0
-    }));
-    streams.push({
-      url: tab.embedUrl,
-      type: "embed",
-      audio: tab.normalized,
-      server: `${tab.server}-embed`,
-      referer: `${new URL(tab.embedUrl).origin}/`,
-      priority: 1,
-      isActive: false
-    });
-    return streams;
-  }));
-  return { title, streams: results.flatMap((r) => r.status === "fulfilled" ? r.value : []) };
-}
-__name(scrapeEpisodeWatch, "scrapeEpisodeWatch");
-async function searchFn(query) {
-  const r1 = await search(query);
-  const compact = query.split(/\s+/)[0].replace(/[^a-zA-Z0-9]/g, "");
-  if (compact.length >= 4 && compact.toLowerCase() !== query.toLowerCase()) {
-    try {
-      const r2 = await search(compact);
-      const seen = new Set(r1.map((r) => r.slug));
-      r2.forEach((r) => {
-        if (!seen.has(r.slug)) r1.push(r);
-      });
-    } catch {
-    }
-  }
-  return r1;
-}
-__name(searchFn, "searchFn");
-async function resolveSeries2(anilistId, ctx = {}) {
-  const cacheKey = `np:animegg:${anilistId}`;
-  const cached = get(cacheKey);
-  if (isFresh(cached)) return cached.data;
-  const media = ctx.media ?? await getMedia(anilistId);
-  const titles = buildTitles(media, ctx.anizip);
-  const candidates = await findTopSlugs(titles, searchFn);
-  const expected = expectedCount(media, ctx.anizip, ctx.jikanEps);
-  const offset = await getPrequelOffset(anilistId).catch(() => 0);
-  const isSingleMovie = String(media?.format ?? "").toUpperCase() === "MOVIE" || expected === 1;
-  const selected = await selectSeries(candidates, scrapeSeries, expected, media?.status, offset, {
-    minScore: isSingleMovie ? 0.9 : 0.65
-  });
-  if (!selected) throw new Error(`AnimeGG match not found for AniList ${anilistId}`);
-  const data = { slug: selected.slug, title: selected.title, mode: selected.mode, offset, score: selected.score };
-  set(cacheKey, data, SHOW_IDENTITY_TTL);
-  return data;
-}
-__name(resolveSeries2, "resolveSeries");
-function buildEpisodeLists(anilistId, series, providerEpisodes, ctx, expected) {
-  const sub = [], dub = [];
-  for (const src of providerEpisodes) {
-    const number = series.mode === "offset" ? src.number - series.offset : src.number;
-    if (number < 1) continue;
-    if (expected && number > expected) continue;
-    const meta = episodeMeta(number, ctx);
-    const base = {
-      number,
-      title: meta.title ?? src.title ?? `Episode ${number}`,
-      duration: meta.duration,
-      filler: meta.filler,
-      uncensored: meta.uncensored,
-      description: meta.description,
-      image: meta.image,
-      airDate: meta.airDate,
-      sourceNumber: src.number
-    };
-    if (src.hasSub) sub.push({ ...base, id: `watch/animegg/${anilistId}/sub/animegg-${number}`, audio: "sub" });
-    if (src.hasDub) dub.push({ ...base, id: `watch/animegg/${anilistId}/dub/animegg-${number}`, audio: "dub" });
-  }
-  return { sub, dub };
-}
-__name(buildEpisodeLists, "buildEpisodeLists");
-async function getEpisodes4(anilistId, ctx = {}) {
-  const media = ctx.media ?? await getMedia(anilistId);
-  const localCtx = { ...ctx, media };
-  const series = await resolveSeries2(anilistId, localCtx);
-  const episodes = await scrapeSeries(series.slug);
-  const expected = expectedCount(media, ctx.anizip, ctx.jikanEps);
-  return {
-    meta: {
-      id: series.slug,
-      title: series.title,
-      source: "animegg",
-      matchScore: Number(series.score.toFixed(3)),
-      numbering: series.mode,
-      episodeOffset: series.mode === "offset" ? series.offset : 0
-    },
-    episodes: buildEpisodeLists(anilistId, series, episodes, localCtx, expected)
-  };
-}
-__name(getEpisodes4, "getEpisodes");
-async function handleWatch4(anilistId, audio, epNum, ctx = {}) {
-  const series = await resolveSeries2(anilistId, ctx);
-  const providerEp = series.mode === "offset" ? Number(epNum) + series.offset : Number(epNum);
-  const episodes = await scrapeSeries(series.slug);
-  const ep = episodes.find((e) => e.number === providerEp);
-  if (!ep) return json({ error: `AnimeGG episode ${providerEp} not found` }, 404);
-  const watch = await scrapeEpisodeWatch(ep.epSlug, audio);
-  return json({ anilistId: Number(anilistId), episode: Number(epNum), providerEpisode: providerEp, audio, title: watch.title, streams: watch.streams });
-}
-__name(handleWatch4, "handleWatch");
-var animegg_default = {
-  async fetch(request) {
-    const url = new URL(request.url);
-    if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,OPTIONS", "Access-Control-Allow-Headers": "*" } });
-    }
-    try {
-      const m = url.pathname.match(/^\/watch\/animegg\/(\d+)\/(sub|dub)\/animegg-(\d+)\/?$/);
-      if (m) return await handleWatch4(m[1], m[2], m[3]);
-      return json({ error: "Not found" }, 404);
-    } catch (err) {
-      return json({ error: err.message, "Raw-ERROR": err.rawBody ?? null, stack: err.stack }, 500);
-    }
-  }
-};
-
 // providers/anineko.js
-var BASE3 = "https://anineko.to";
-async function search2(query) {
-  const html = await fetchHtml(`${BASE3}/browser?keyword=${encodeURIComponent(query)}`);
+var BASE2 = "https://anineko.to";
+async function search(query) {
+  const html = await fetchHtml(`${BASE2}/browser?keyword=${encodeURIComponent(query)}`);
   const results = [];
   for (const m of html.matchAll(/<a\b[^>]*class=["'][^"']*nv-anime-thumb[^"']*["'][^>]*>[\s\S]*?<\/a>/gi)) {
     const tag = m[0].match(/<a\b[^>]*>/i)?.[0] ?? "";
@@ -5235,9 +5020,9 @@ async function search2(query) {
   }
   return results;
 }
-__name(search2, "search");
-async function scrapeSeries2(slug) {
-  const html = await fetchHtml(`${BASE3}/watch/${slug}`);
+__name(search, "search");
+async function scrapeSeries(slug) {
+  const html = await fetchHtml(`${BASE2}/watch/${slug}`);
   const episodes = [];
   for (const m of html.matchAll(/<article\b[^>]*class=["'][^"']*nv-info-episode-item[^"']*["'][^>]*>([\s\S]*?)<\/article>/gi)) {
     const block = m[1];
@@ -5259,9 +5044,9 @@ async function scrapeSeries2(slug) {
   const seen = /* @__PURE__ */ new Set();
   return episodes.filter((e) => seen.has(e.number) ? false : (seen.add(e.number), true));
 }
-__name(scrapeSeries2, "scrapeSeries");
+__name(scrapeSeries, "scrapeSeries");
 async function extractHls(embedUrl) {
-  const html = await fetchHtml(embedUrl, { Referer: `${BASE3}/` }).catch(() => "");
+  const html = await fetchHtml(embedUrl, { Referer: `${BASE2}/` }).catch(() => "");
   const patterns = [
     /const\s+src\s*=\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i,
     /file\s*:\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i,
@@ -5275,8 +5060,8 @@ async function extractHls(embedUrl) {
   return null;
 }
 __name(extractHls, "extractHls");
-async function scrapeEpisodeWatch2(seriesSlug, epSlug, audio) {
-  const html = await fetchHtml(`${BASE3}/watch/${seriesSlug}/${epSlug}`, { Referer: `${BASE3}/watch/${seriesSlug}` });
+async function scrapeEpisodeWatch(seriesSlug, epSlug, audio) {
+  const html = await fetchHtml(`${BASE2}/watch/${seriesSlug}/${epSlug}`, { Referer: `${BASE2}/watch/${seriesSlug}` });
   const byAudio = { sub: [], dub: [] };
   for (const panel of html.matchAll(/<div\b[^>]*class=["'][^"']*nv-server-grid[^"']*["'][^>]*data-id=["']([^"']+)["'][^>]*>([\s\S]*?)(?=<div\b[^>]*class=["'][^"']*nv-server-grid|$)/gi)) {
     const rawAudio = panel[1].toLowerCase();
@@ -5304,24 +5089,24 @@ async function scrapeEpisodeWatch2(seriesSlug, epSlug, audio) {
   }));
   return streams;
 }
-__name(scrapeEpisodeWatch2, "scrapeEpisodeWatch");
-async function resolveSeries3(anilistId, ctx = {}) {
+__name(scrapeEpisodeWatch, "scrapeEpisodeWatch");
+async function resolveSeries2(anilistId, ctx = {}) {
   const cacheKey = `np:anineko:${anilistId}`;
   const cached = get(cacheKey);
   if (isFresh(cached)) return cached.data;
   const media = ctx.media ?? await getMedia(anilistId);
   const titles = buildTitles(media, ctx.anizip);
-  const candidates = await findTopSlugs(titles, search2);
+  const candidates = await findTopSlugs(titles, search);
   const expected = expectedCount(media, ctx.anizip, ctx.jikanEps);
   const offset = await getPrequelOffset(anilistId).catch(() => 0);
-  const selected = await selectSeries(candidates, scrapeSeries2, expected, media?.status, offset);
+  const selected = await selectSeries(candidates, scrapeSeries, expected, media?.status, offset);
   if (!selected) throw new Error(`AniNeko match not found for AniList ${anilistId}`);
   const data = { slug: selected.slug, title: selected.title, mode: selected.mode, offset, score: selected.score };
   set(cacheKey, data, SHOW_IDENTITY_TTL);
   return data;
 }
-__name(resolveSeries3, "resolveSeries");
-function buildEpisodeLists2(anilistId, series, providerEpisodes, ctx, expected) {
+__name(resolveSeries2, "resolveSeries");
+function buildEpisodeLists(anilistId, series, providerEpisodes, ctx, expected) {
   const sub = [], dub = [];
   for (const src of providerEpisodes) {
     const number = series.mode === "offset" ? src.number - series.offset : src.number;
@@ -5344,12 +5129,12 @@ function buildEpisodeLists2(anilistId, series, providerEpisodes, ctx, expected) 
   }
   return { sub, dub };
 }
-__name(buildEpisodeLists2, "buildEpisodeLists");
-async function getEpisodes5(anilistId, ctx = {}) {
+__name(buildEpisodeLists, "buildEpisodeLists");
+async function getEpisodes4(anilistId, ctx = {}) {
   const media = ctx.media ?? await getMedia(anilistId);
   const localCtx = { ...ctx, media };
-  const series = await resolveSeries3(anilistId, localCtx);
-  const episodes = await scrapeSeries2(series.slug);
+  const series = await resolveSeries2(anilistId, localCtx);
+  const episodes = await scrapeSeries(series.slug);
   const expected = expectedCount(media, ctx.anizip, ctx.jikanEps);
   return {
     meta: {
@@ -5360,17 +5145,17 @@ async function getEpisodes5(anilistId, ctx = {}) {
       numbering: series.mode,
       episodeOffset: series.mode === "offset" ? series.offset : 0
     },
-    episodes: buildEpisodeLists2(anilistId, series, episodes, localCtx, expected)
+    episodes: buildEpisodeLists(anilistId, series, episodes, localCtx, expected)
   };
 }
-__name(getEpisodes5, "getEpisodes");
-async function handleWatch5(anilistId, audio, epNum, ctx = {}) {
-  const series = await resolveSeries3(anilistId, ctx);
+__name(getEpisodes4, "getEpisodes");
+async function handleWatch4(anilistId, audio, epNum, ctx = {}) {
+  const series = await resolveSeries2(anilistId, ctx);
   const providerEp = series.mode === "offset" ? Number(epNum) + series.offset : Number(epNum);
-  const streams = await scrapeEpisodeWatch2(series.slug, `ep-${providerEp}`, audio);
+  const streams = await scrapeEpisodeWatch(series.slug, `ep-${providerEp}`, audio);
   return json({ anilistId: Number(anilistId), episode: Number(epNum), providerEpisode: providerEp, audio, streams });
 }
-__name(handleWatch5, "handleWatch");
+__name(handleWatch4, "handleWatch");
 var anineko_default = {
   async fetch(request) {
     const url = new URL(request.url);
@@ -5379,336 +5164,7 @@ var anineko_default = {
     }
     try {
       const m = url.pathname.match(/^\/watch\/anineko\/(\d+)\/(sub|dub)\/anineko-(\d+)\/?$/);
-      if (m) return await handleWatch5(m[1], m[2], m[3]);
-      return json({ error: "Not found" }, 404);
-    } catch (err) {
-      return json({ error: err.message, "Raw-ERROR": err.rawBody ?? null, stack: err.stack }, 500);
-    }
-  }
-};
-
-// providers/anidbapp.js
-var BASE4 = "https://anidb.app";
-var UA7 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
-var NAV_HEADERS = [
-  "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-  "Accept-Language: en-US,en;q=0.9",
-  'sec-ch-ua: "Google Chrome";v="137", "Chromium";v="137", "Not/A)Brand";v="24"',
-  "sec-ch-ua-mobile: ?0",
-  'sec-ch-ua-platform: "Windows"',
-  "sec-fetch-dest: document",
-  "sec-fetch-mode: navigate",
-  "sec-fetch-site: none",
-  "sec-fetch-user: ?1",
-  "upgrade-insecure-requests: 1"
-];
-var XHR_HEADERS = [
-  "Accept: application/json, text/html, */*;q=0.8",
-  "Accept-Language: en-US,en;q=0.9",
-  'sec-ch-ua: "Google Chrome";v="137", "Chromium";v="137", "Not/A)Brand";v="24"',
-  "sec-ch-ua-mobile: ?0",
-  'sec-ch-ua-platform: "Windows"',
-  "sec-fetch-dest: empty",
-  "sec-fetch-mode: cors",
-  "sec-fetch-site: same-origin",
-  "X-Requested-With: XMLHttpRequest"
-];
-var cookieStore = "";
-async function curlFetch(url, headersArray, extraArgs = []) {
-  const headers = new Headers();
-  headers.set("User-Agent", UA7);
-  if (cookieStore) headers.set("Cookie", cookieStore);
-  for (const h of headersArray) {
-    const split = h.indexOf(":");
-    if (split > 0) {
-      headers.set(h.slice(0, split).trim(), h.slice(split + 1).trim());
-    }
-  }
-  const res = await fetch(url, { headers });
-  const setCookie = res.headers.get("set-cookie");
-  if (setCookie) cookieStore = setCookie;
-  if (!res.ok) {
-    const err = new Error(`HTTP ${res.status} fetching ${url}`);
-    err.rawBody = await res.text();
-    throw err;
-  }
-  return await res.text();
-}
-__name(curlFetch, "curlFetch");
-async function fetchAnidbHtml(url, referer) {
-  const headers = referer ? [...NAV_HEADERS, `Referer: ${referer}`] : NAV_HEADERS;
-  return curlFetch(url, headers);
-}
-__name(fetchAnidbHtml, "fetchAnidbHtml");
-async function fetchXhr(url, referer) {
-  const headers = referer ? [...XHR_HEADERS, `Referer: ${referer}`] : XHR_HEADERS;
-  return curlFetch(url, headers);
-}
-__name(fetchXhr, "fetchXhr");
-async function fetchJson(url, referer) {
-  const text = await fetchXhr(url, referer);
-  return JSON.parse(text);
-}
-__name(fetchJson, "fetchJson");
-async function search3(query) {
-  const html = await fetchXhr(`${BASE4}/search/suggestions?q=${encodeURIComponent(query)}`, `${BASE4}/home`).catch(() => "");
-  const results = [];
-  for (const m of html.matchAll(/<a\b[^>]*data-search-item\b[^>]*>[\s\S]*?<\/a>/gi)) {
-    const tag = m[0].match(/<a\b[^>]*>/i)?.[0] ?? "";
-    const href = attr(tag, "href");
-    const path = href.startsWith("http") ? new URL(href).pathname : href;
-    const slug = path.match(/^\/anime\/([^/?#]+)/)?.[1];
-    if (!slug) continue;
-    const title = stripTags(m[0].match(/<p\b[^>]*class=["'][^"']*text-sm[^"']*["'][^>]*>([\s\S]*?)<\/p>/i)?.[1] ?? "");
-    const meta = stripTags(m[0].match(/<p\b[^>]*class=["'][^"']*text-xs[^"']*["'][^>]*>([\s\S]*?)<\/p>/i)?.[1] ?? "");
-    const siteId = Number(slug.match(/-(\d+)$/)?.[1]);
-    results.push({ slug, title: title || slug.replace(/-/g, " "), meta, siteId });
-  }
-  if (results.length) return results;
-  const browseHtml = await fetchAnidbHtml(`${BASE4}/browse?q=${encodeURIComponent(query)}`, `${BASE4}/home`).catch(() => "");
-  const seen = /* @__PURE__ */ new Set();
-  for (const m of browseHtml.matchAll(/<a\b[^>]*href=["'](?:https:\/\/anidb\.app)?\/anime\/([^"']+)["'][^>]*class=["'][^"']*\banime-card\b[^"']*["'][^>]*>[\s\S]*?<\/a>/gi)) {
-    const slug = m[1];
-    if (seen.has(slug)) continue;
-    seen.add(slug);
-    const title = stripTags(m[0].match(/title=["']([^"']+)["']/i)?.[1] ?? "") || stripTags(m[0].match(/alt=["']([^"']+)["']/i)?.[1] ?? "") || slug.replace(/-/g, " ");
-    const siteId = Number(slug.match(/-(\d+)$/)?.[1]);
-    results.push({ slug, title, meta: "", siteId });
-  }
-  return results;
-}
-__name(search3, "search");
-function parseExternalIds(html) {
-  return {
-    anilistId: Number(html.match(/https:\/\/anilist\.co\/anime\/(\d+)/i)?.[1]) || null,
-    malId: Number(html.match(/https:\/\/myanimelist\.net\/anime\/(\d+)/i)?.[1]) || null,
-    anidbId: Number(html.match(/https:\/\/anidb\.net\/anime\/(\d+)/i)?.[1]) || null,
-    kitsuId: Number(html.match(/https:\/\/kitsu\.app\/anime\/(\d+)/i)?.[1]) || null
-  };
-}
-__name(parseExternalIds, "parseExternalIds");
-function parsePageTitle(html) {
-  return stripTags(html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)?.[1] ?? "");
-}
-__name(parsePageTitle, "parsePageTitle");
-function searchQueries(media, anizip) {
-  const titles = buildTitles(media, anizip);
-  const out = /* @__PURE__ */ new Set();
-  for (const title of titles.slice(0, 5)) {
-    out.add(title);
-    const words = title.trim().split(/\s+/);
-    if (words.length > 4) out.add(words.slice(0, 4).join(" "));
-  }
-  return [...out].filter((q) => q.length >= 2);
-}
-__name(searchQueries, "searchQueries");
-async function resolveSeries4(anilistId, ctx = {}) {
-  const cacheKey = `np:anidbapp:${anilistId}`;
-  const cached = get(cacheKey);
-  if (isFresh(cached)) return cached.data;
-  const media = ctx.media ?? await getMedia(anilistId);
-  const queries = searchQueries(media, ctx.anizip);
-  const candidates = /* @__PURE__ */ new Map();
-  await Promise.all(queries.map(async (q) => {
-    for (const r of await search3(q).catch(() => [])) {
-      if (!candidates.has(r.slug)) candidates.set(r.slug, r);
-    }
-  }));
-  for (const candidate of candidates.values()) {
-    const html = await fetchAnidbHtml(`${BASE4}/anime/${candidate.slug}`, `${BASE4}/home`).catch(() => "");
-    if (!html) continue;
-    const ids = parseExternalIds(html);
-    if (ids.anilistId !== Number(anilistId)) continue;
-    const data = {
-      slug: candidate.slug,
-      siteId: candidate.siteId || Number(candidate.slug.match(/-(\d+)$/)?.[1]),
-      title: parsePageTitle(html) || candidate.title,
-      matchType: "anilist",
-      matchScore: 1,
-      ...ids
-    };
-    set(cacheKey, data, SHOW_IDENTITY_TTL);
-    return data;
-  }
-  const malId = media?.idMal ?? null;
-  if (malId) {
-    for (const candidate of candidates.values()) {
-      const html = await fetchAnidbHtml(`${BASE4}/anime/${candidate.slug}`, `${BASE4}/home`).catch(() => "");
-      if (!html) continue;
-      const ids = parseExternalIds(html);
-      if (ids.anilistId || ids.malId !== Number(malId)) continue;
-      const data = {
-        slug: candidate.slug,
-        siteId: candidate.siteId || Number(candidate.slug.match(/-(\d+)$/)?.[1]),
-        title: parsePageTitle(html) || candidate.title,
-        matchType: "mal",
-        matchScore: 0.9,
-        ...ids
-      };
-      set(cacheKey, data, SHOW_IDENTITY_TTL);
-      return data;
-    }
-  }
-  throw new Error(`AniDB.app match not found for AniList ${anilistId}`);
-}
-__name(resolveSeries4, "resolveSeries");
-async function fetchProviderEpisodes(siteId) {
-  const data = await fetchJson(`${BASE4}/api/frontend/anime/${siteId}/episodes`, `${BASE4}/anime/${siteId}`);
-  return Array.isArray(data.episodes) ? data.episodes : [];
-}
-__name(fetchProviderEpisodes, "fetchProviderEpisodes");
-function inferOffset(providerEpisodes, expected) {
-  const nums = providerEpisodes.map((e) => Number(e.number)).filter((n) => Number.isFinite(n) && n > 0);
-  if (!nums.length || !expected) return 0;
-  const min = Math.min(...nums);
-  const max = Math.max(...nums);
-  if (min > expected) return min - 1;
-  if (min > 1 && max - min + 1 >= expected) return min - 1;
-  return 0;
-}
-__name(inferOffset, "inferOffset");
-async function fetchLanguages(episodeId, seriesSlug) {
-  const data = await fetchJson(`${BASE4}/api/frontend/episode/${episodeId}/languages`, `${BASE4}/anime/${seriesSlug}`).catch(() => null);
-  return Array.isArray(data?.languages) ? data.languages : [];
-}
-__name(fetchLanguages, "fetchLanguages");
-function hasLanguage(languages, audio) {
-  return Boolean(languageForAudio(languages, audio)?.embed_url);
-}
-__name(hasLanguage, "hasLanguage");
-function buildEpisodeLists3(anilistId, providerEpisodes, ctx, expected, offset, availability) {
-  const sub = [];
-  const dub = [];
-  for (const src of providerEpisodes) {
-    const sourceNumber = Number(src.number);
-    const number = sourceNumber - offset;
-    if (!Number.isFinite(number) || number < 1) continue;
-    if (expected && number > expected) continue;
-    const meta = episodeMeta(number, ctx);
-    const base = {
-      number,
-      title: meta.title ?? `Episode ${number}`,
-      duration: meta.duration,
-      filler: src.filler ?? meta.filler,
-      uncensored: meta.uncensored,
-      description: meta.description,
-      image: meta.image,
-      airDate: meta.airDate,
-      sourceNumber,
-      sourceId: src.id
-    };
-    if (availability.hasSub) sub.push({ ...base, id: `watch/anidbapp/${anilistId}/sub/anidbapp-${number}`, audio: "sub" });
-    if (availability.hasDub) dub.push({ ...base, id: `watch/anidbapp/${anilistId}/dub/anidbapp-${number}`, audio: "dub" });
-  }
-  return { sub, dub };
-}
-__name(buildEpisodeLists3, "buildEpisodeLists");
-function languageForAudio(languages, audio) {
-  const preferred = audio === "sub" ? ["jpn", "ja", "japanese"] : ["eng", "en", "english"];
-  return languages.find((l) => preferred.includes(String(l.code ?? "").toLowerCase())) ?? languages.find((l) => preferred.includes(String(l.name ?? "").toLowerCase())) ?? null;
-}
-__name(languageForAudio, "languageForAudio");
-function extractHls2(html) {
-  const patterns = [
-    /file\s*:\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i,
-    /sources\s*:\s*\[\s*\{[^}]*file\s*:\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i,
-    /["'](https?:\/\/[^"']+\/master\.m3u8[^"']*)["']/i,
-    /["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i
-  ];
-  for (const pattern of patterns) {
-    const m = html.match(pattern);
-    if (m?.[1]) return decodeEntities(m[1]);
-  }
-  return null;
-}
-__name(extractHls2, "extractHls");
-async function streamsForEmbed(embedUrl, audio, language) {
-  const html = await fetchAnidbHtml(embedUrl, { Referer: `${BASE4}/` }).catch(() => "");
-  const hls = html ? extractHls2(html) : null;
-  const streams = [];
-  if (hls) {
-    streams.push({
-      url: hls,
-      type: "hls",
-      audio,
-      language: language.code,
-      server: "AniDB.app",
-      embed: embedUrl,
-      referer: `${new URL(embedUrl).origin}/`,
-      priority: 5,
-      isActive: true
-    });
-  }
-  streams.push({
-    url: embedUrl,
-    type: "embed",
-    audio,
-    language: language.code,
-    server: "AniDB.app-embed",
-    referer: `${BASE4}/`,
-    priority: 4,
-    isActive: !hls
-  });
-  return streams;
-}
-__name(streamsForEmbed, "streamsForEmbed");
-async function getEpisodes6(anilistId, ctx = {}) {
-  const media = ctx.media ?? await getMedia(anilistId);
-  const localCtx = { ...ctx, media };
-  const series = await resolveSeries4(anilistId, localCtx);
-  const episodes = await fetchProviderEpisodes(series.siteId);
-  const expected = expectedCount(media, ctx.anizip, ctx.jikanEps);
-  const offset = inferOffset(episodes, expected);
-  const sampleLanguages = episodes[0]?.id ? await fetchLanguages(episodes[0].id, series.slug) : [];
-  const availability = {
-    hasSub: hasLanguage(sampleLanguages, "sub") || !sampleLanguages.length,
-    hasDub: hasLanguage(sampleLanguages, "dub")
-  };
-  return {
-    meta: {
-      id: series.slug,
-      siteId: series.siteId,
-      title: series.title,
-      source: "anidbapp",
-      matchScore: series.matchScore,
-      matchType: series.matchType,
-      anilistId: series.anilistId,
-      malId: series.malId,
-      numbering: offset ? "offset" : "local",
-      episodeOffset: offset
-    },
-    episodes: buildEpisodeLists3(anilistId, episodes, localCtx, expected, offset, availability)
-  };
-}
-__name(getEpisodes6, "getEpisodes");
-async function handleWatch6(anilistId, audio, epNum, ctx = {}) {
-  const series = await resolveSeries4(anilistId, ctx);
-  const episodes = await fetchProviderEpisodes(series.siteId);
-  const media = ctx.media ?? await getMedia(anilistId).catch(() => null);
-  const expected = expectedCount(media, ctx.anizip, ctx.jikanEps);
-  const offset = inferOffset(episodes, expected);
-  const providerEp = Number(epNum) + offset;
-  const episode = episodes.find((e) => Number(e.number) === providerEp);
-  if (!episode) return json({ error: `AniDB.app episode ${epNum} not found` }, 404);
-  const languages = await fetchLanguages(episode.id, series.slug);
-  const language = languageForAudio(languages, audio);
-  if (!language?.embed_url) {
-    return json({ anilistId: Number(anilistId), episode: Number(epNum), providerEpisode: providerEp, audio, streams: [] });
-  }
-  const embedUrl = decodeEntities(language.embed_url);
-  const streams = await streamsForEmbed(embedUrl, audio, language);
-  return json({ anilistId: Number(anilistId), episode: Number(epNum), providerEpisode: providerEp, audio, language: language.code, streams });
-}
-__name(handleWatch6, "handleWatch");
-var anidbapp_default = {
-  async fetch(request) {
-    const url = new URL(request.url);
-    if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,OPTIONS", "Access-Control-Allow-Headers": "*" } });
-    }
-    try {
-      const m = url.pathname.match(/^\/watch\/anidbapp\/(\d+)\/(sub|dub)\/anidbapp-(\d+)\/?$/);
-      if (m) return await handleWatch6(m[1], m[2], m[3]);
+      if (m) return await handleWatch4(m[1], m[2], m[3]);
       return json({ error: "Not found" }, 404);
     } catch (err) {
       return json({ error: err.message, "Raw-ERROR": err.rawBody ?? null, stack: err.stack }, 500);
@@ -5723,10 +5179,10 @@ async function getMalId(anilistId, ctx) {
   return idMal;
 }
 __name(getMalId, "getMalId");
-var BASE5 = "https://2dhive.com";
-var UA8 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+var BASE3 = "https://2dhive.com";
+var UA7 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 async function fetchPage(url) {
-  const res = await fetch(url, { headers: { "User-Agent": UA8 } });
+  const res = await fetch(url, { headers: { "User-Agent": UA7 } });
   if (!res.ok) throw new Error(`2dhive ${res.status}: ${url}`);
   return res.text();
 }
@@ -5770,15 +5226,15 @@ function parseEpisodeNums(html, malId) {
 }
 __name(parseEpisodeNums, "parseEpisodeNums");
 async function fetchEpisodePage(malId, epNum) {
-  const html = await fetchPage(`${BASE5}/episode?anime=${malId}&ep_num=${epNum}`);
+  const html = await fetchPage(`${BASE3}/episode?anime=${malId}&ep_num=${epNum}`);
   const rawProps = extractPlayerProps(html);
   if (!rawProps) throw new Error(`2dhive: no player props for mal ${malId} ep${epNum}`);
   return decodeProps(rawProps);
 }
 __name(fetchEpisodePage, "fetchEpisodePage");
-async function getEpisodes7(anilistId, ctx = {}) {
+async function getEpisodes5(anilistId, ctx = {}) {
   const malId = await getMalId(anilistId, ctx);
-  const animeHtml = await fetchPage(`${BASE5}/anime?anime=${malId}`);
+  const animeHtml = await fetchPage(`${BASE3}/anime?anime=${malId}`);
   const epNums = parseEpisodeNums(animeHtml, malId);
   if (!epNums.length) throw new Error(`2dhive: no episodes found for AniList ${anilistId} (MAL ${malId})`);
   const props = await fetchEpisodePage(malId, epNums[0]);
@@ -5812,15 +5268,15 @@ async function getEpisodes7(anilistId, ctx = {}) {
     episodes: { sub, dub }
   };
 }
-__name(getEpisodes7, "getEpisodes");
-async function handleWatch7(anilistId, audio, epNum) {
+__name(getEpisodes5, "getEpisodes");
+async function handleWatch5(anilistId, audio, epNum) {
   const malId = await getMalId(anilistId);
-  const referer = `${BASE5}/episode?anime=${malId}&ep_num=${epNum}`;
+  const referer = `${BASE3}/episode?anime=${malId}&ep_num=${epNum}`;
   const fileKey = `${malId}_${epNum}_${audio}`;
   const [propsResult, hiAnimeResult, dlContent] = await Promise.allSettled([
     fetchEpisodePage(malId, epNum),
-    audio !== "dub" ? fetch(`${BASE5}/api/hianime?mal_id=${malId}&ep_num=${epNum}`, {
-      headers: { "User-Agent": UA8, "Referer": referer }
+    audio !== "dub" ? fetch(`${BASE3}/api/hianime?mal_id=${malId}&ep_num=${epNum}`, {
+      headers: { "User-Agent": UA7, "Referer": referer }
     }).then((r) => r.ok ? r.json() : null).catch(() => null) : Promise.resolve(null),
     fetchDownloadHls(malId, audio, epNum)
   ]);
@@ -5840,8 +5296,8 @@ async function handleWatch7(anilistId, audio, epNum) {
     );
     const hadfreeResults = await Promise.allSettled(
       hadfreeEntries.map(
-        (entry) => fetch(`${BASE5}/api/hadfree?slug=${encodeURIComponent(entry.slug)}`, {
-          headers: { "User-Agent": UA8, "Referer": referer }
+        (entry) => fetch(`${BASE3}/api/hadfree?slug=${encodeURIComponent(entry.slug)}`, {
+          headers: { "User-Agent": UA7, "Referer": referer }
         }).then((r) => r.ok ? r.json() : null).catch(() => null)
       )
     );
@@ -5870,14 +5326,14 @@ async function handleWatch7(anilistId, audio, epNum) {
   }
   return json({ anilistId: Number(anilistId), episode: Number(epNum), audio, streams });
 }
-__name(handleWatch7, "handleWatch");
+__name(handleWatch5, "handleWatch");
 async function fetchDownloadHls(malId, audio, epNum) {
   const fileKey = `${malId}_${epNum}_${audio}`;
   try {
-    const res = await fetch(`${BASE5}/download?file=${encodeURIComponent(fileKey)}`, {
+    const res = await fetch(`${BASE3}/download?file=${encodeURIComponent(fileKey)}`, {
       headers: {
-        "User-Agent": UA8,
-        "Referer": `${BASE5}/episode?anime=${malId}&ep_num=${epNum}`
+        "User-Agent": UA7,
+        "Referer": `${BASE3}/episode?anime=${malId}&ep_num=${epNum}`
       }
     });
     if (!res.ok) return null;
@@ -5946,7 +5402,7 @@ var dhive_default = {
     const path = url.pathname;
     try {
       let m = path.match(/^\/watch\/2dhive\/(\d+)\/(sub|dub)\/2dhive-(\d+)\/?$/);
-      if (m) return await handleWatch7(m[1], m[2], m[3]);
+      if (m) return await handleWatch5(m[1], m[2], m[3]);
       m = path.match(/^\/stream\/2dhive\/(\d+)\/(sub|dub)\/(\d+)\/?$/);
       if (m) return await handleStream(m[1], m[2], m[3]);
       m = path.match(/^\/stream\/2dhive\/download\/(\d+)\/(sub|dub)\/(\d+)\/?$/);
@@ -5960,14 +5416,15 @@ var dhive_default = {
 
 // providers/animenosub.js
 import crypto2 from "node:crypto";
-var BASE6 = "https://animenosub.to";
-var UA9 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
+import { Buffer as Buffer2 } from "node:buffer";
+var BASE4 = "https://animenosub.to";
+var UA8 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
 function b64u(buf) {
-  return Buffer.from(buf).toString("base64url");
+  return Buffer2.from(buf).toString("base64url");
 }
 __name(b64u, "b64u");
 function b64uDec(s) {
-  return Buffer.from(s, "base64url");
+  return Buffer2.from(s, "base64url");
 }
 __name(b64uDec, "b64uDec");
 var _be = 512;
@@ -6058,20 +5515,20 @@ async function resolveByse(embedUrl) {
   const code = embedUrl.match(/\/e\/([a-z0-9]+)/i)?.[1];
   if (!code) throw new Error(`Cannot extract Byse code from ${embedUrl}`);
   const det = await (await fetch(`https://bysesayeveum.com/api/videos/${code}/embed/details`, {
-    headers: { "User-Agent": UA9, "Referer": embedUrl }
+    headers: { "User-Agent": UA8, "Referer": embedUrl }
   })).json();
   const frameUrl = det.embed_frame_url;
   const frameBase = new URL(frameUrl).origin;
   const ch = await (await fetch(`${frameBase}/api/videos/access/challenge`, {
     method: "POST",
-    headers: { "Content-Length": "0", "Origin": frameBase, "Referer": frameUrl, "User-Agent": UA9 }
+    headers: { "Content-Length": "0", "Origin": frameBase, "Referer": frameUrl, "User-Agent": UA8 }
   })).json();
   const keyPair = await crypto2.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign"]);
   const pubJwk = await crypto2.subtle.exportKey("jwk", keyPair.publicKey);
   const sig = await crypto2.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, keyPair.privateKey, new TextEncoder().encode(ch.nonce));
   const att = await (await fetch(`${frameBase}/api/videos/access/attest`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Origin": frameBase, "Referer": frameUrl, "User-Agent": UA9 },
+    headers: { "Content-Type": "application/json", "Origin": frameBase, "Referer": frameUrl, "User-Agent": UA8 },
     body: JSON.stringify({ nonce: ch.nonce, challenge_id: ch.challenge_id, public_key: pubJwk, signature: b64u(sig) })
   })).json();
   const viewerId = att.viewer_id, deviceId = att.device_id, fpToken = att.token, confidence = att.confidence;
@@ -6079,40 +5536,40 @@ async function resolveByse(embedUrl) {
   const fingerprint = { token: fpToken, viewer_id: viewerId, device_id: deviceId, confidence };
   const cap = await (await fetch(`${frameBase}/api/videos/${code}/embed/captcha`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Origin": frameBase, "Referer": frameUrl, "User-Agent": UA9, "Cookie": cookieStr, "X-Embed-Parent": embedUrl },
+    headers: { "Content-Type": "application/json", "Origin": frameBase, "Referer": frameUrl, "User-Agent": UA8, "Cookie": cookieStr, "X-Embed-Parent": embedUrl },
     body: "{}"
   })).json();
   const solution = solvePoW(cap.pow_nonce, cap.pow_difficulty);
   const ver = await (await fetch(`${frameBase}/api/videos/${code}/embed/captcha/verify`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Origin": frameBase, "Referer": frameUrl, "User-Agent": UA9, "Cookie": cookieStr, "X-Embed-Parent": embedUrl },
+    headers: { "Content-Type": "application/json", "Origin": frameBase, "Referer": frameUrl, "User-Agent": UA8, "Cookie": cookieStr, "X-Embed-Parent": embedUrl },
     body: JSON.stringify({ pow_token: cap.pow_token, solution, fingerprint })
   })).json();
   const pbData = await (await fetch(`${frameBase}/api/videos/${code}/embed/playback`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Origin": frameBase, "Referer": frameUrl, "User-Agent": UA9, "Cookie": cookieStr, "X-Captcha-Token": ver.token, "X-Embed-Parent": embedUrl },
+    headers: { "Content-Type": "application/json", "Origin": frameBase, "Referer": frameUrl, "User-Agent": UA8, "Cookie": cookieStr, "X-Captcha-Token": ver.token, "X-Embed-Parent": embedUrl },
     body: JSON.stringify({ fingerprint })
   })).json();
   const pb = pbData.playback;
-  const keyBytes = Buffer.concat(pb.key_parts.filter((k) => b64uDec(k).length === 16).map((k) => b64uDec(k)));
+  const keyBytes = Buffer2.concat(pb.key_parts.filter((k) => b64uDec(k).length === 16).map((k) => b64uDec(k)));
   const aesKey = await crypto2.subtle.importKey("raw", keyBytes, { name: "AES-GCM" }, false, ["decrypt"]);
   const dec2 = await crypto2.subtle.decrypt({ name: "AES-GCM", iv: b64uDec(pb.iv) }, aesKey, b64uDec(pb.payload));
   const playback = JSON.parse(new TextDecoder().decode(dec2));
   return playback.sources.map((s) => s.url);
 }
 __name(resolveByse, "resolveByse");
-var NOVA_KEY = Buffer.from("6b69656d7469656e6d75613931316361", "hex");
-var NOVA_IV = Buffer.from("313233343536373839306f6975797472", "hex");
+var NOVA_KEY = Buffer2.from("6b69656d7469656e6d75613931316361", "hex");
+var NOVA_IV = Buffer2.from("313233343536373839306f6975797472", "hex");
 async function resolveNova(embedUrl) {
   const id = embedUrl.match(/upn\.one\/#([A-Za-z0-9]+)/i)?.[1];
   if (!id) throw new Error(`Cannot extract Nova id from ${embedUrl}`);
   const res = await fetch(`https://nova.upn.one/api/v1/video?id=${id}&w=1920&h=1080&r=`, {
-    headers: { "User-Agent": UA9, "Referer": "https://nova.upn.one/" }
+    headers: { "User-Agent": UA8, "Referer": "https://nova.upn.one/" }
   });
   if (!res.ok) throw new Error(`Nova fetch HTTP ${res.status}`);
   const hex = (await res.text()).trim();
   const decipher = crypto2.createDecipheriv("aes-128-cbc", NOVA_KEY, NOVA_IV);
-  const decrypted = Buffer.concat([decipher.update(Buffer.from(hex, "hex")), decipher.final()]);
+  const decrypted = Buffer2.concat([decipher.update(Buffer2.from(hex, "hex")), decipher.final()]);
   const data = JSON.parse(decrypted.toString("utf8"));
   const m3u8 = data.cf ?? data.source;
   if (!m3u8) throw new Error("Nova response missing m3u8 url");
@@ -6122,7 +5579,7 @@ __name(resolveNova, "resolveNova");
 async function resolveVidmoly(embedUrl) {
   const url = embedUrl.startsWith("//") ? `https:${embedUrl}` : embedUrl;
   const res = await fetch(url, {
-    headers: { "User-Agent": UA9, "Referer": `${BASE6}/` },
+    headers: { "User-Agent": UA8, "Referer": `${BASE4}/` },
     redirect: "follow"
   });
   if (!res.ok) throw new Error(`Vidmoly fetch HTTP ${res.status}`);
@@ -6132,15 +5589,15 @@ async function resolveVidmoly(embedUrl) {
   return [m[1]];
 }
 __name(resolveVidmoly, "resolveVidmoly");
-async function search4(query) {
-  const res = await fetch(`${BASE6}/wp-admin/admin-ajax.php`, {
+async function search2(query) {
+  const res = await fetch(`${BASE4}/wp-admin/admin-ajax.php`, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
       "X-Requested-With": "XMLHttpRequest",
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
-      Origin: BASE6,
-      Referer: `${BASE6}/`
+      Origin: BASE4,
+      Referer: `${BASE4}/`
     },
     body: `action=ts_ac_do_search&ts_ac_query=${encodeURIComponent(query)}`
   });
@@ -6154,9 +5611,9 @@ async function search4(query) {
   }
   return results;
 }
-__name(search4, "search");
-async function scrapeSeries3(slug) {
-  const html = await fetchHtml(`${BASE6}/anime/${slug}/`, { Referer: BASE6 });
+__name(search2, "search");
+async function scrapeSeries2(slug) {
+  const html = await fetchHtml(`${BASE4}/anime/${slug}/`, { Referer: BASE4 });
   const isSlugDub = /-dub$/.test(slug) || /(?:^|[-\s])dub(?:$|[-\s])/i.test(slug);
   const episodes = [];
   const seen = /* @__PURE__ */ new Set();
@@ -6173,15 +5630,15 @@ async function scrapeSeries3(slug) {
     }
     if (number === null || seen.has(number)) continue;
     seen.add(number);
-    const isDub2 = isSlugDub || /-dub(?:$|\/)/.test(epUrl);
-    episodes.push({ number, title: /^movie$/i.test(label) ? "Movie" : `Episode ${number}`, epUrl, hasSub: !isDub2, hasDub: isDub2 });
+    const isDub = isSlugDub || /-dub(?:$|\/)/.test(epUrl);
+    episodes.push({ number, title: /^movie$/i.test(label) ? "Movie" : `Episode ${number}`, epUrl, hasSub: !isDub, hasDub: isDub });
   }
   episodes.sort((a, b) => a.number - b.number);
   return episodes;
 }
-__name(scrapeSeries3, "scrapeSeries");
+__name(scrapeSeries2, "scrapeSeries");
 async function scrapeEmbeds(epUrl) {
-  const html = await fetchHtml(epUrl, { Referer: `${BASE6}/` });
+  const html = await fetchHtml(epUrl, { Referer: `${BASE4}/` });
   const streams = [];
   for (const m of html.matchAll(/<option\s+value="([A-Za-z0-9+/=]+)"\s+data-index="\d+"[^>]*>([^<]+)<\/option>/gi)) {
     const b64 = m[1];
@@ -6232,23 +5689,23 @@ async function scrapeEmbeds(epUrl) {
   return streams;
 }
 __name(scrapeEmbeds, "scrapeEmbeds");
-async function resolveSeries5(anilistId, ctx = {}) {
+async function resolveSeries3(anilistId, ctx = {}) {
   const cacheKey = `np:animenosub:${anilistId}`;
   const cached = get(cacheKey);
   if (isFresh(cached)) return cached.data;
   const media = ctx.media ?? await getMedia(anilistId);
   const titles = buildTitles(media, ctx.anizip);
-  const candidates = await findTopSlugs(titles, search4);
+  const candidates = await findTopSlugs(titles, search2);
   const expected = expectedCount(media, ctx.anizip, ctx.jikanEps);
   const offset = await getPrequelOffset(anilistId).catch(() => 0);
-  const selected = await selectSeries(candidates, scrapeSeries3, expected, media?.status, offset);
+  const selected = await selectSeries(candidates, scrapeSeries2, expected, media?.status, offset);
   if (!selected) throw new Error(`animenosub match not found for AniList ${anilistId}`);
   const data = { slug: selected.slug, title: selected.title, mode: selected.mode, offset, score: selected.score };
   set(cacheKey, data, SHOW_IDENTITY_TTL);
   return data;
 }
-__name(resolveSeries5, "resolveSeries");
-function buildEpisodeLists4(anilistId, series, providerEpisodes, ctx, expected) {
+__name(resolveSeries3, "resolveSeries");
+function buildEpisodeLists2(anilistId, series, providerEpisodes, ctx, expected) {
   const sub = [], dub = [];
   for (const src of providerEpisodes) {
     const number = series.mode === "offset" ? src.number - series.offset : src.number;
@@ -6271,12 +5728,12 @@ function buildEpisodeLists4(anilistId, series, providerEpisodes, ctx, expected) 
   }
   return { sub, dub };
 }
-__name(buildEpisodeLists4, "buildEpisodeLists");
-async function getEpisodes8(anilistId, ctx = {}) {
+__name(buildEpisodeLists2, "buildEpisodeLists");
+async function getEpisodes6(anilistId, ctx = {}) {
   const media = ctx.media ?? await getMedia(anilistId);
   const localCtx = { ...ctx, media };
-  const series = await resolveSeries5(anilistId, localCtx);
-  const episodes = await scrapeSeries3(series.slug);
+  const series = await resolveSeries3(anilistId, localCtx);
+  const episodes = await scrapeSeries2(series.slug);
   const expected = expectedCount(media, ctx.anizip, ctx.jikanEps);
   return {
     meta: {
@@ -6287,10 +5744,10 @@ async function getEpisodes8(anilistId, ctx = {}) {
       numbering: series.mode,
       episodeOffset: series.mode === "offset" ? series.offset : 0
     },
-    episodes: buildEpisodeLists4(anilistId, series, episodes, localCtx, expected)
+    episodes: buildEpisodeLists2(anilistId, series, episodes, localCtx, expected)
   };
 }
-__name(getEpisodes8, "getEpisodes");
+__name(getEpisodes6, "getEpisodes");
 async function withRetry(fn, attempts = 2) {
   for (let i = 0; i < attempts; i++) {
     try {
@@ -6314,10 +5771,10 @@ function isNova(url) {
   return /upn\.one/i.test(url);
 }
 __name(isNova, "isNova");
-async function handleWatch8(anilistId, audio, epNum, ctx = {}) {
-  const series = await resolveSeries5(anilistId, ctx);
+async function handleWatch6(anilistId, audio, epNum, ctx = {}) {
+  const series = await resolveSeries3(anilistId, ctx);
   const providerEp = series.mode === "offset" ? Number(epNum) + series.offset : Number(epNum);
-  const episodes = await scrapeSeries3(series.slug);
+  const episodes = await scrapeSeries2(series.slug);
   const ep = episodes.find((e) => e.number === providerEp && (audio === "dub" ? e.hasDub : e.hasSub)) ?? episodes.find((e) => e.number === providerEp);
   if (!ep) throw new Error(`animenosub episode ${providerEp} not found`);
   const embeds = await scrapeEmbeds(ep.epUrl);
@@ -6348,7 +5805,7 @@ async function handleWatch8(anilistId, audio, epNum, ctx = {}) {
   }
   return json({ anilistId: Number(anilistId), episode: Number(epNum), providerEpisode: providerEp, audio, streams });
 }
-__name(handleWatch8, "handleWatch");
+__name(handleWatch6, "handleWatch");
 var animenosub_default = {
   async fetch(request) {
     const url = new URL(request.url);
@@ -6357,7 +5814,7 @@ var animenosub_default = {
     }
     try {
       const m = url.pathname.match(/^\/watch\/animenosub\/(\d+)\/(sub|dub)\/animenosub-(\d+)\/?$/);
-      if (m) return await handleWatch8(m[1], m[2], m[3]);
+      if (m) return await handleWatch6(m[1], m[2], m[3]);
       return json({ error: "Not found" }, 404);
     } catch (err) {
       return json({ error: err.message, "Raw-ERROR": err.rawBody ?? null, stack: err.stack }, 500);
@@ -6366,7 +5823,7 @@ var animenosub_default = {
 };
 
 // providers/anizone.js
-var BASE7 = "https://anizone.to";
+var BASE5 = "https://anizone.to";
 function scoreCandidate2(query, candidate, slug) {
   const base = Math.max(diceCoeff(query, candidate), diceCoeff(query, slug.replace(/-/g, " ")));
   const isMovieQuery = /\b(movie|film|the movie)\b/i.test(query);
@@ -6387,15 +5844,15 @@ function buildSearchQueries2(title) {
   return [...queries].filter((q) => q.length >= 3);
 }
 __name(buildSearchQueries2, "buildSearchQueries");
-async function findCandidates(titles, searchFn3, n = 6) {
+async function findCandidates(titles, searchFn2, n = 6) {
   const allCandidates = /* @__PURE__ */ new Map();
-  const searchQueries2 = /* @__PURE__ */ new Set();
+  const searchQueries = /* @__PURE__ */ new Set();
   for (const title of titles.slice(0, 4)) {
-    for (const q of buildSearchQueries2(title)) searchQueries2.add(q);
+    for (const q of buildSearchQueries2(title)) searchQueries.add(q);
   }
-  await Promise.all([...searchQueries2].map(async (q) => {
+  await Promise.all([...searchQueries].map(async (q) => {
     try {
-      const results = await searchFn3(q);
+      const results = await searchFn2(q);
       for (const r of results) if (!allCandidates.has(r.slug)) allCandidates.set(r.slug, r.text);
     } catch {
     }
@@ -6436,8 +5893,8 @@ function extractJsonArg(xdata, key) {
   return m ? m[1] : null;
 }
 __name(extractJsonArg, "extractJsonArg");
-async function search5(query) {
-  const html = await fetchHtml(`${BASE7}/anime?search=${encodeURIComponent(query)}`);
+async function search3(query) {
+  const html = await fetchHtml(`${BASE5}/anime?search=${encodeURIComponent(query)}`);
   const results = [];
   const xdataRe = /x-data="(\{[^"]*anmTitles[^"]*\})"/g;
   let m;
@@ -6456,9 +5913,9 @@ async function search5(query) {
   }
   return results;
 }
-__name(search5, "search");
-async function scrapeSeries4(slug) {
-  const html = await fetchHtml(`${BASE7}/anime/${slug}`);
+__name(search3, "search");
+async function scrapeSeries3(slug) {
+  const html = await fetchHtml(`${BASE5}/anime/${slug}`);
   const episodes = [];
   const xdataRe = /x-data="(\{[^"]*epsTitles[^"]*\})"/g;
   let m;
@@ -6482,9 +5939,9 @@ async function scrapeSeries4(slug) {
   const seen = /* @__PURE__ */ new Set();
   return episodes.filter((e) => seen.has(e.number) ? false : (seen.add(e.number), true)).sort((a, b) => a.number - b.number);
 }
-__name(scrapeSeries4, "scrapeSeries");
+__name(scrapeSeries3, "scrapeSeries");
 async function scrapeWatch(slug, episodeNum) {
-  const html = await fetchHtml(`${BASE7}/anime/${slug}/${episodeNum}`);
+  const html = await fetchHtml(`${BASE5}/anime/${slug}/${episodeNum}`);
   const hlsMatch = html.match(/<media-player[^>]+src="([^"]+\.m3u8[^"]*)"/i);
   const hls = hlsMatch ? decodeEntities(hlsMatch[1]) : null;
   const subtitles = [];
@@ -6508,12 +5965,12 @@ async function scrapeWatch(slug, episodeNum) {
   return { hls, subtitles, storyboard, chapters };
 }
 __name(scrapeWatch, "scrapeWatch");
-async function searchFn2(query) {
-  const r1 = await search5(query);
+async function searchFn(query) {
+  const r1 = await search3(query);
   const compact = query.split(/\s+/)[0].replace(/[^a-zA-Z0-9]/g, "");
   if (compact.length >= 4 && compact.toLowerCase() !== query.toLowerCase()) {
     try {
-      const r2 = await search5(compact);
+      const r2 = await search3(compact);
       const seen = new Set(r1.map((r) => r.slug));
       r2.forEach((r) => {
         if (!seen.has(r.slug)) r1.push(r);
@@ -6523,14 +5980,14 @@ async function searchFn2(query) {
   }
   return r1;
 }
-__name(searchFn2, "searchFn");
-async function resolveSeries6(anilistId, ctx = {}) {
+__name(searchFn, "searchFn");
+async function resolveSeries4(anilistId, ctx = {}) {
   const cacheKey = `np:anizone:${anilistId}`;
   const cached = get(cacheKey);
   if (isFresh(cached)) return cached.data;
   const media = ctx.media ?? await getMedia(anilistId);
   const titles = buildTitles(media, ctx.anizip);
-  let candidates = await findCandidates(titles, searchFn2);
+  let candidates = await findCandidates(titles, searchFn);
   const seasonYear = media?.seasonYear;
   if (seasonYear && candidates.some((c) => /\(\d{4}\)/.test(c.title))) {
     candidates = candidates.map((c) => {
@@ -6543,14 +6000,14 @@ async function resolveSeries6(anilistId, ctx = {}) {
   }
   const expected = expectedCount(media, ctx.anizip, ctx.jikanEps);
   const offset = await getPrequelOffset(anilistId).catch(() => 0);
-  const selected = await selectSeries(candidates, scrapeSeries4, expected, media?.status, offset);
+  const selected = await selectSeries(candidates, scrapeSeries3, expected, media?.status, offset);
   if (!selected) throw new Error(`AniZone match not found for AniList ${anilistId}`);
   const data = { slug: selected.slug, title: selected.title, mode: selected.mode, offset, score: selected.score };
   set(cacheKey, data, SHOW_IDENTITY_TTL);
   return data;
 }
-__name(resolveSeries6, "resolveSeries");
-function buildEpisodeLists5(anilistId, series, providerEpisodes, ctx, expected) {
+__name(resolveSeries4, "resolveSeries");
+function buildEpisodeLists3(anilistId, series, providerEpisodes, ctx, expected) {
   const sub = [], dub = [];
   for (const src of providerEpisodes) {
     const number = series.mode === "offset" ? src.number - series.offset : src.number;
@@ -6573,12 +6030,12 @@ function buildEpisodeLists5(anilistId, series, providerEpisodes, ctx, expected) 
   }
   return { sub, dub };
 }
-__name(buildEpisodeLists5, "buildEpisodeLists");
-async function getEpisodes9(anilistId, ctx = {}) {
+__name(buildEpisodeLists3, "buildEpisodeLists");
+async function getEpisodes7(anilistId, ctx = {}) {
   const media = ctx.media ?? await getMedia(anilistId);
   const localCtx = { ...ctx, media };
-  const series = await resolveSeries6(anilistId, localCtx);
-  const episodes = await scrapeSeries4(series.slug);
+  const series = await resolveSeries4(anilistId, localCtx);
+  const episodes = await scrapeSeries3(series.slug);
   const expected = expectedCount(media, ctx.anizip, ctx.jikanEps);
   return {
     meta: {
@@ -6589,12 +6046,12 @@ async function getEpisodes9(anilistId, ctx = {}) {
       numbering: series.mode,
       episodeOffset: series.mode === "offset" ? series.offset : 0
     },
-    episodes: buildEpisodeLists5(anilistId, series, episodes, localCtx, expected)
+    episodes: buildEpisodeLists3(anilistId, series, episodes, localCtx, expected)
   };
 }
-__name(getEpisodes9, "getEpisodes");
-async function handleWatch9(anilistId, audio, epNum, ctx = {}) {
-  const series = await resolveSeries6(anilistId, ctx);
+__name(getEpisodes7, "getEpisodes");
+async function handleWatch7(anilistId, audio, epNum, ctx = {}) {
+  const series = await resolveSeries4(anilistId, ctx);
   const providerEp = series.mode === "offset" ? Number(epNum) + series.offset : Number(epNum);
   const watch = await scrapeWatch(series.slug, providerEp);
   if (!watch.hls) throw new Error(`No HLS stream found for AniZone episode ${providerEp}`);
@@ -6615,7 +6072,7 @@ async function handleWatch9(anilistId, audio, epNum, ctx = {}) {
     }]
   });
 }
-__name(handleWatch9, "handleWatch");
+__name(handleWatch7, "handleWatch");
 var anizone_default = {
   async fetch(request) {
     const url = new URL(request.url);
@@ -6624,7 +6081,7 @@ var anizone_default = {
     }
     try {
       const m = url.pathname.match(/^\/watch\/anizone\/(\d+)\/(sub|dub)\/anizone-(\d+)\/?$/);
-      if (m) return await handleWatch9(m[1], m[2], m[3]);
+      if (m) return await handleWatch7(m[1], m[2], m[3]);
       return json({ error: "Not found" }, 404);
     } catch (err) {
       return json({ error: err.message, "Raw-ERROR": err.rawBody ?? null, stack: err.stack }, 500);
@@ -6632,828 +6089,9 @@ var anizone_default = {
   }
 };
 
-// providers/anibd.js
-var BASE8 = "https://epeng.animeapps.top";
-var UA10 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-async function fetchJson2(url) {
-  const res = await fetch(url, { headers: { "User-Agent": UA10, Accept: "application/json" } });
-  if (!res.ok) throw new Error(`anibd ${res.status}: ${url}`);
-  return res.json();
-}
-__name(fetchJson2, "fetchJson");
-async function fetchHtml2(url, referer) {
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": UA10,
-      Accept: "text/html,application/xhtml+xml",
-      ...referer ? { Referer: referer } : {}
-    }
-  });
-  if (!res.ok) throw new Error(`anibd ${res.status}: ${url}`);
-  return res.text();
-}
-__name(fetchHtml2, "fetchHtml");
-async function fetchServers(anilistId) {
-  const data = await fetchJson2(`${BASE8}/api2.php?epid=${anilistId}`);
-  return Array.isArray(data) ? data : [];
-}
-__name(fetchServers, "fetchServers");
-async function fetchPlayerLinks(providerLink) {
-  const data = await fetchJson2(`${BASE8}/apilink.php?data=${encodeURIComponent(providerLink)}`);
-  return Array.isArray(data) ? data : [];
-}
-__name(fetchPlayerLinks, "fetchPlayerLinks");
-function extractVideoUrl(html, origin) {
-  const m = html.match(/videoUrl\s*:\s*"([^"]+)"/);
-  if (!m) return null;
-  const raw2 = m[1];
-  if (/^https?:\/\//i.test(raw2)) return raw2;
-  return `${origin}${raw2.startsWith("/") ? "" : "/"}${raw2}`;
-}
-__name(extractVideoUrl, "extractVideoUrl");
-async function resolvePlayerStream(playerLink) {
-  const origin = new URL(playerLink).origin;
-  const referer = `${origin}/`;
-  const html = await fetchHtml2(playerLink, referer);
-  const hls = extractVideoUrl(html, origin);
-  if (!hls) throw new Error(`anibd: no videoUrl found at ${playerLink}`);
-  return { hls, referer };
-}
-__name(resolvePlayerStream, "resolvePlayerStream");
-function audioFromServerName(name = "") {
-  return /dub/i.test(name) ? "dub" : "sub";
-}
-__name(audioFromServerName, "audioFromServerName");
-function buildEpisodeLists6(anilistId, groups, ctx, expected) {
-  const sub = [];
-  const dub = [];
-  const seenSub = /* @__PURE__ */ new Set();
-  const seenDub = /* @__PURE__ */ new Set();
-  for (const group of groups) {
-    const audio = audioFromServerName(group.server_name);
-    for (const ep of group.server_data ?? []) {
-      const number = Number(ep.name ?? ep.slug);
-      if (!Number.isFinite(number) || number < 1) continue;
-      if (expected && number > expected) continue;
-      const bucket = audio === "dub" ? dub : sub;
-      const seen = audio === "dub" ? seenDub : seenSub;
-      if (seen.has(number)) continue;
-      seen.add(number);
-      const meta = episodeMeta(number, ctx);
-      bucket.push({
-        id: `watch/anibd/${anilistId}/${audio}/anibd-${number}`,
-        number,
-        title: meta.title ?? `Episode ${number}`,
-        duration: meta.duration,
-        filler: meta.filler,
-        uncensored: meta.uncensored,
-        description: meta.description,
-        image: meta.image,
-        airDate: meta.airDate,
-        sourceLink: ep.link,
-        audio
-      });
-    }
-  }
-  sub.sort((a, b) => a.number - b.number);
-  dub.sort((a, b) => a.number - b.number);
-  return { sub, dub };
-}
-__name(buildEpisodeLists6, "buildEpisodeLists");
-async function getEpisodes10(anilistId, ctx = {}) {
-  const groups = await fetchServers(anilistId);
-  if (!groups.length) throw new Error(`anibd: no episodes found for AniList ${anilistId}`);
-  const expected = expectedCount(ctx.media, ctx.anizip, ctx.jikanEps);
-  return {
-    meta: {
-      id: String(anilistId),
-      source: "anibd",
-      matchScore: 1,
-      numbering: "standard",
-      episodeOffset: 0
-    },
-    episodes: buildEpisodeLists6(anilistId, groups, ctx, expected)
-  };
-}
-__name(getEpisodes10, "getEpisodes");
-async function findEpisodeLink(anilistId, audio, epNum) {
-  const groups = await fetchServers(anilistId);
-  for (const group of groups) {
-    if (audioFromServerName(group.server_name) !== audio) continue;
-    for (const ep of group.server_data ?? []) {
-      if (Number(ep.name ?? ep.slug) === Number(epNum)) return ep.link;
-    }
-  }
-  return null;
-}
-__name(findEpisodeLink, "findEpisodeLink");
-async function handleWatch10(anilistId, audio, epNum) {
-  const providerLink = await findEpisodeLink(anilistId, audio, epNum);
-  if (!providerLink) return json({ error: `anibd episode ${epNum} not found` }, 404);
-  const servers = await fetchPlayerLinks(providerLink);
-  const streams = [];
-  let activeAssigned = false;
-  for (const entry of servers) {
-    if (!entry?.link) continue;
-    try {
-      const { hls, referer } = await resolvePlayerStream(entry.link);
-      streams.push({
-        url: hls,
-        type: "hls",
-        server: entry.server ?? "AniBD",
-        referer,
-        priority: activeAssigned ? 4 : 5,
-        isActive: !activeAssigned
-      });
-      activeAssigned = true;
-    } catch {
-      streams.push({
-        url: entry.link,
-        type: "embed",
-        server: entry.server ?? "AniBD",
-        referer: `${new URL(entry.link).origin}/`,
-        priority: 1,
-        isActive: false
-      });
-    }
-  }
-  return json({ anilistId: Number(anilistId), episode: Number(epNum), audio, streams });
-}
-__name(handleWatch10, "handleWatch");
-var anibd_default = {
-  async fetch(request) {
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET,OPTIONS",
-          "Access-Control-Allow-Headers": "*"
-        }
-      });
-    }
-    const url = new URL(request.url);
-    try {
-      const m = url.pathname.match(/^\/watch\/anibd\/(\d+)\/(sub|dub)\/anibd-(\d+)\/?$/);
-      if (m) return await handleWatch10(m[1], m[2], m[3]);
-      return json({ error: "Not found" }, 404);
-    } catch (err) {
-      return json({ error: err.message, stack: err.stack }, 500);
-    }
-  }
-};
-
-// providers/senshi.js
-var BASE9 = "https://senshi.live";
-var UA11 = "Mozilla/5.0 (X11; Linux x86_64; rv:146.0) Gecko/20100101 Firefox/146.0";
-var H2 = { "User-Agent": UA11, "Referer": `${BASE9}/` };
-async function fetchEpisodeList(malId) {
-  const res = await fetch(`${BASE9}/episodes/${malId}`, { headers: H2 });
-  if (!res.ok) throw new Error(`Senshi episodes ${res.status} (MAL ${malId})`);
-  const data = await res.json();
-  return Array.isArray(data) ? data : [];
-}
-__name(fetchEpisodeList, "fetchEpisodeList");
-async function fetchEmbeds(malId, epNum) {
-  const res = await fetch(`${BASE9}/episode-embeds/${malId}/${epNum}`, { headers: H2 });
-  if (!res.ok) throw new Error(`Senshi embeds ${res.status} (MAL ${malId} ep ${epNum})`);
-  const data = await res.json();
-  return Array.isArray(data) ? data : [];
-}
-__name(fetchEmbeds, "fetchEmbeds");
-async function resolveMalId(anilistId) {
-  const cacheKey = `np:senshi:${anilistId}`;
-  const cached = get(cacheKey);
-  if (isFresh(cached)) return cached.data;
-  const media = await getMedia(anilistId);
-  if (!media?.idMal) throw new Error(`Senshi: no MAL ID found for AniList ${anilistId}`);
-  set(cacheKey, media.idMal, SHOW_IDENTITY_TTL);
-  return media.idMal;
-}
-__name(resolveMalId, "resolveMalId");
-function isDub(status) {
-  return (status ?? "").toLowerCase() === "dub";
-}
-__name(isDub, "isDub");
-async function getEpisodes11(anilistId, ctx = {}) {
-  const malId = await resolveMalId(anilistId);
-  const items = await fetchEpisodeList(malId);
-  if (!items.length) {
-    throw new Error(`Senshi: no episodes for AniList ${anilistId} (MAL ${malId})`);
-  }
-  let hasDub = false;
-  try {
-    const probe = await fetchEmbeds(malId, 1);
-    hasDub = probe.some((e) => isDub(e.status));
-  } catch {
-  }
-  const sub = [];
-  const dub = [];
-  for (const item of items) {
-    const num = item.ep_id;
-    const meta = episodeMeta(num, ctx);
-    const title = item.ep_title || meta.title || `Episode ${num}`;
-    const duration = meta.duration;
-    const filler = item.ep_filler || meta.filler || false;
-    const recap = item.ep_recap || false;
-    const description = meta.description;
-    const image = meta.image;
-    const airDate = meta.airDate;
-    sub.push({
-      id: `watch/senshi/${anilistId}/sub/senshi-${num}`,
-      number: num,
-      title,
-      duration,
-      audio: "sub",
-      filler,
-      recap,
-      uncensored: false,
-      description,
-      image,
-      airDate
-    });
-    if (hasDub) {
-      dub.push({
-        id: `watch/senshi/${anilistId}/dub/senshi-${num}`,
-        number: num,
-        title,
-        duration,
-        audio: "dub",
-        filler,
-        recap,
-        uncensored: false,
-        description,
-        image,
-        airDate
-      });
-    }
-  }
-  sub.sort((a, b) => a.number - b.number);
-  dub.sort((a, b) => a.number - b.number);
-  return {
-    meta: {
-      title: ctx.media?.title?.english ?? ctx.media?.title?.romaji ?? null,
-      malId,
-      source: "senshi"
-    },
-    episodes: { sub, dub }
-  };
-}
-__name(getEpisodes11, "getEpisodes");
-async function handleWatch11(anilistId, audio, epNum) {
-  const malId = await resolveMalId(anilistId);
-  const embeds = await fetchEmbeds(malId, epNum);
-  if (!embeds.length) {
-    return json({ error: `Senshi: no sources for episode ${epNum}` }, 404);
-  }
-  const wantDub = audio === "dub";
-  const source = embeds.find((e) => wantDub ? isDub(e.status) : !isDub(e.status));
-  if (!source) {
-    return json({ error: `Senshi: no ${audio} source for episode ${epNum}` }, 404);
-  }
-  const list = await fetchEpisodeList(malId).catch(() => []);
-  const epItem = list.find((item) => Number(item.ep_id) === Number(epNum));
-  const intro = {
-    start: epItem?.intro_start ?? 0,
-    end: epItem?.intro_end ?? 0
-  };
-  const outro = {
-    start: epItem?.outro_start ?? 0,
-    end: epItem?.outro_end ?? 0
-  };
-  const streams = [];
-  const downloads = [];
-  if (source.url) {
-    streams.push({
-      url: source.url,
-      type: "hls",
-      server: "Senshi",
-      referer: `${BASE9}/`,
-      priority: 5,
-      isActive: true
-    });
-  }
-  if (source.server2) {
-    streams.push({
-      url: source.server2,
-      type: "embed",
-      server: "StreamNin",
-      referer: `${BASE9}/`,
-      priority: 3,
-      isActive: false
-    });
-  }
-  if (source.serverFM) {
-    streams.push({
-      url: source.serverFM,
-      type: "embed",
-      server: "FileMoon",
-      referer: `${BASE9}/`,
-      priority: 2,
-      isActive: false
-    });
-  }
-  if (source.download) {
-    downloads.push({ url: source.download, label: "Download" });
-  }
-  return json({
-    anilistId: Number(anilistId),
-    malId,
-    episode: Number(epNum),
-    audio,
-    intro,
-    outro,
-    streams,
-    downloads,
-    headers: H2
-  });
-}
-__name(handleWatch11, "handleWatch");
-var senshi_default = {
-  async fetch(request) {
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET,OPTIONS",
-          "Access-Control-Allow-Headers": "*"
-        }
-      });
-    }
-    const url = new URL(request.url);
-    try {
-      const m = url.pathname.match(/^\/watch\/senshi\/(\d+)\/(sub|dub)\/senshi-(\d+)\/?$/);
-      if (m) return await handleWatch11(m[1], m[2], m[3]);
-      return json({ error: "Not found" }, 404);
-    } catch (err) {
-      return json({ error: err.message, stack: err.stack }, 500);
-    }
-  }
-};
-
-// providers/kickassanime.js
-var BASE10 = "https://kaa.lt";
-var HLS_BASE = "https://hls.krussdomi.com/manifest";
-var UA12 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-var H3 = { "User-Agent": UA12, Accept: "application/json" };
-async function kaaSearch(query) {
-  const res = await fetch(`${BASE10}/api/fsearch`, {
-    method: "POST",
-    headers: { ...H3, "Content-Type": "application/json" },
-    body: JSON.stringify({ page: 1, query })
-  });
-  if (!res.ok) throw new Error(`kaa fsearch HTTP ${res.status}`);
-  const data = await res.json();
-  return Array.isArray(data?.result) ? data.result : [];
-}
-__name(kaaSearch, "kaaSearch");
-async function kaaShowInfo(showSlug) {
-  const res = await fetch(`${BASE10}/api/show/${showSlug}`, { headers: H3 });
-  if (!res.ok) throw new Error(`kaa show HTTP ${res.status}: ${showSlug}`);
-  return res.json();
-}
-__name(kaaShowInfo, "kaaShowInfo");
-async function kaaEpisodePage(showSlug, ep) {
-  const res = await fetch(
-    `${BASE10}/api/show/${showSlug}/episodes?ep=${ep}&lang=ja-JP`,
-    { headers: H3 }
-  );
-  if (!res.ok) throw new Error(`kaa episodes HTTP ${res.status}`);
-  return res.json();
-}
-__name(kaaEpisodePage, "kaaEpisodePage");
-async function kaaAllEpisodes(showSlug) {
-  const first = await kaaEpisodePage(showSlug, 1);
-  const pages = Array.isArray(first.pages) ? first.pages : [];
-  const all = Array.isArray(first.result) ? [...first.result] : [];
-  if (pages.length > 1) {
-    const rest = await Promise.all(
-      pages.slice(1).map(async (pg) => {
-        const startEp = pg.eps?.[0];
-        if (!startEp) return [];
-        const d = await kaaEpisodePage(showSlug, startEp);
-        return Array.isArray(d.result) ? d.result : [];
-      })
-    );
-    for (const batch of rest) all.push(...batch);
-  }
-  return all;
-}
-__name(kaaAllEpisodes, "kaaAllEpisodes");
-async function kaaEpisodeServers(showSlug, fullEpSlug) {
-  const res = await fetch(
-    `${BASE10}/api/show/${showSlug}/episode/${fullEpSlug}`,
-    { headers: H3 }
-  );
-  if (!res.ok) throw new Error(`kaa episode servers HTTP ${res.status}`);
-  return res.json();
-}
-__name(kaaEpisodeServers, "kaaEpisodeServers");
-function buildKaaQueries(titles) {
-  const queries = /* @__PURE__ */ new Set();
-  for (const title of titles.slice(0, 4)) {
-    if (/[\u3000-\u9fff\u4e00-\u9faf]/.test(title)) continue;
-    const clean = title.replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
-    if (!clean || clean.length < 3) continue;
-    const words = clean.split(" ").filter(Boolean);
-    if (words.length <= 3) {
-      queries.add(clean);
-    } else {
-      queries.add(words.slice(0, 2).join(" "));
-      queries.add(words.slice(0, 3).join(" "));
-    }
-  }
-  return [...queries];
-}
-__name(buildKaaQueries, "buildKaaQueries");
-function scoreCandidate3(candidate, titles, seasonYear, anilistFormat) {
-  const titleEn = candidate.title_en || "";
-  const titleJp = candidate.title || "";
-  const kaaYear = Number(candidate.year);
-  const kaaType = (candidate.type || "").toLowerCase();
-  let base = 0;
-  for (const t of titles.slice(0, 3)) {
-    if (/[\u3000-\u9fff\u4e00-\u9faf]/.test(t)) continue;
-    base = Math.max(base, diceCoeff(t, titleEn), diceCoeff(t, titleJp));
-  }
-  let yearMult = 1;
-  if (seasonYear && kaaYear) {
-    const diff = Math.abs(Number(seasonYear) - kaaYear);
-    if (diff === 0) yearMult = 1.2;
-    else if (diff === 1) yearMult = 0.8;
-    else yearMult = 0.5;
-  }
-  let typeMult = 1;
-  const af = (anilistFormat || "").toUpperCase();
-  if (af === "MOVIE" && kaaType !== "movie") typeMult = 0.25;
-  else if (af !== "MOVIE" && kaaType === "movie") typeMult = 0.25;
-  else if ((af === "OVA" || af === "ONA" || af === "SPECIAL") && kaaType === "tv") typeMult = 0.5;
-  else if (af === "TV" && (kaaType === "ova" || kaaType === "special")) typeMult = 0.5;
-  return Math.min(1, base * yearMult) * typeMult;
-}
-__name(scoreCandidate3, "scoreCandidate");
-async function resolveSeries7(anilistId, ctx = {}) {
-  const cacheKey = `np:kaa:${anilistId}`;
-  const cached = get(cacheKey);
-  if (isFresh(cached)) return cached.data;
-  const media = ctx.media ?? await getMedia(anilistId);
-  const titles = buildTitles(media, ctx.anizip);
-  const queries = buildKaaQueries(titles);
-  const seasonYear = media?.seasonYear;
-  const format = media?.format;
-  if (!queries.length) throw new Error(`KAA: no usable search queries for AniList ${anilistId}`);
-  const allCandidates = /* @__PURE__ */ new Map();
-  await Promise.all(
-    queries.map(async (q) => {
-      try {
-        const results = await kaaSearch(q);
-        for (const r of results) {
-          if (!allCandidates.has(r.slug)) allCandidates.set(r.slug, r);
-        }
-      } catch {
-      }
-    })
-  );
-  if (!allCandidates.size) throw new Error(`KAA: no search results for AniList ${anilistId}`);
-  const scored = [];
-  for (const [, candidate] of allCandidates) {
-    const score = scoreCandidate3(candidate, titles, seasonYear, format);
-    if (score >= 0.5) {
-      scored.push({
-        slug: candidate.slug,
-        title: candidate.title_en || candidate.title,
-        locales: Array.isArray(candidate.locales) ? candidate.locales : [],
-        score
-      });
-    }
-  }
-  scored.sort((a, b) => b.score - a.score);
-  if (!scored.length) {
-    throw new Error(`KAA: no confident match for AniList ${anilistId}`);
-  }
-  const best = scored[0];
-  if (best.score < 0.6) {
-    throw new Error(
-      `KAA: low confidence match for AniList ${anilistId} \u2014 best "${best.slug}" score ${best.score.toFixed(3)}`
-    );
-  }
-  const data = {
-    slug: best.slug,
-    title: best.title,
-    locales: best.locales,
-    score: best.score
-  };
-  set(cacheKey, data, SHOW_IDENTITY_TTL);
-  return data;
-}
-__name(resolveSeries7, "resolveSeries");
-async function buildEpMap(showSlug, showInfo) {
-  if (showInfo?.type === "movie") {
-    const m = (showInfo.watch_uri || "").match(/\/(ep-(\d+)-([a-f0-9]+))$/i);
-    if (m) return [{ number: 1, fullSlug: m[1] }];
-    return [];
-  }
-  const episodes = await kaaAllEpisodes(showSlug);
-  return episodes.map((e) => ({
-    number: e.episode_number,
-    fullSlug: `ep-${e.episode_number}-${e.slug}`,
-    title: e.title,
-    duration: e.duration_ms ? Math.round(e.duration_ms / 1e3) : null
-  }));
-}
-__name(buildEpMap, "buildEpMap");
-async function getEpisodes12(anilistId, ctx = {}) {
-  const media = ctx.media ?? await getMedia(anilistId);
-  const localCtx = { ...ctx, media };
-  const series = await resolveSeries7(anilistId, localCtx);
-  const showInfo = await kaaShowInfo(series.slug);
-  const locales = Array.isArray(showInfo.locales) ? showInfo.locales : series.locales;
-  const hasDub = locales.includes("en-US");
-  const epMap = await buildEpMap(series.slug, showInfo);
-  if (!epMap.length) throw new Error(`KAA: no episodes found for AniList ${anilistId} (slug: ${series.slug})`);
-  const expected = expectedCount(media, ctx.anizip, ctx.jikanEps);
-  const sub = [];
-  const dub = [];
-  for (const ep of epMap) {
-    const num = ep.number;
-    if (!Number.isFinite(num) || num < 1) continue;
-    if (expected && num > expected) continue;
-    const meta = episodeMeta(num, localCtx);
-    const base = {
-      number: num,
-      title: meta.title ?? ep.title ?? `Episode ${num}`,
-      duration: meta.duration ?? ep.duration,
-      filler: meta.filler,
-      uncensored: false,
-      description: meta.description,
-      image: meta.image,
-      airDate: meta.airDate
-    };
-    sub.push({ id: `watch/kaa/${anilistId}/sub/kaa-${num}`, ...base, audio: "sub" });
-    if (hasDub) {
-      dub.push({ id: `watch/kaa/${anilistId}/dub/kaa-${num}`, ...base, audio: "dub" });
-    }
-  }
-  return {
-    meta: {
-      id: series.slug,
-      title: series.title,
-      source: "kaa",
-      matchScore: Number(series.score.toFixed(3))
-    },
-    episodes: { sub, dub }
-  };
-}
-__name(getEpisodes12, "getEpisodes");
-async function handleWatch12(anilistId, audio, epNum) {
-  const series = await resolveSeries7(anilistId);
-  const showInfo = await kaaShowInfo(series.slug);
-  const locales = Array.isArray(showInfo.locales) ? showInfo.locales : series.locales;
-  if (audio === "dub" && !locales.includes("en-US")) {
-    return json({ error: `KAA: no English dub for AniList ${anilistId}` }, 404);
-  }
-  const epMap = await buildEpMap(series.slug, showInfo);
-  const ep = epMap.find((e) => e.number === Number(epNum));
-  if (!ep) {
-    return json({ error: `KAA: episode ${epNum} not found for AniList ${anilistId}` }, 404);
-  }
-  const episodeData = await kaaEpisodeServers(series.slug, ep.fullSlug);
-  const servers = Array.isArray(episodeData.servers) ? episodeData.servers : [];
-  if (!servers.length) {
-    return json({ error: `KAA: no streams for episode ${epNum} (AniList ${anilistId})` }, 404);
-  }
-  const streams = [];
-  for (const s of servers) {
-    if (!s.src) continue;
-    const m = s.src.match(/[?&]id=([^&]+)/);
-    if (!m) continue;
-    streams.push({
-      url: `${HLS_BASE}/${m[1]}/master.m3u8`,
-      type: "hls",
-      server: s.name || "KAA",
-      headers: { Referer: "https://krussdomi.com/" },
-      priority: 1,
-      isActive: true
-    });
-  }
-  if (!streams.length) {
-    return json({ error: `KAA: could not resolve stream for episode ${epNum}` }, 404);
-  }
-  return json({
-    anilistId: Number(anilistId),
-    episode: Number(epNum),
-    audio,
-    streams
-  });
-}
-__name(handleWatch12, "handleWatch");
-var kickassanime_default = {
-  async fetch(request) {
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET,OPTIONS",
-          "Access-Control-Allow-Headers": "*"
-        }
-      });
-    }
-    const url = new URL(request.url);
-    try {
-      const m = url.pathname.match(/^\/watch\/kaa\/(\d+)\/(sub|dub)\/kaa-(\d+)\/?$/);
-      if (m) return await handleWatch12(m[1], m[2], m[3]);
-      return json({ error: "Not found" }, 404);
-    } catch (err) {
-      return json({ error: err.message, stack: err.stack }, 500);
-    }
-  }
-};
-
-// providers/animedunya.js
-var BASE11 = "https://anime-dunya.com";
-async function resolveMalId2(anilistId) {
-  const cacheKey = `np:animedunya:${anilistId}`;
-  const cached = get(cacheKey);
-  if (isFresh(cached)) return cached.data;
-  const media = await getMedia(anilistId);
-  if (!media?.idMal) throw new Error("AnimeDunya: no MAL ID found");
-  set(cacheKey, media.idMal, SHOW_IDENTITY_TTL);
-  return media.idMal;
-}
-__name(resolveMalId2, "resolveMalId");
-async function fetchHtml3(url) {
-  try {
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9"
-      }
-    });
-    if (!res.ok) return null;
-    return await res.text();
-  } catch (err) {
-    return null;
-  }
-}
-__name(fetchHtml3, "fetchHtml");
-function extractEpisodesList(html) {
-  const match2 = html.match(/\\?"episodes\\?":\s*\[/);
-  if (!match2) return [];
-  const idx = match2.index;
-  const matchLen = match2[0].length;
-  let braceCount = 1;
-  let result = "[";
-  for (let i = idx + matchLen; i < html.length; i++) {
-    const char = html[i];
-    if (char === "[") braceCount++;
-    else if (char === "]") braceCount--;
-    result += char;
-    if (braceCount === 0) break;
-  }
-  try {
-    const cleanStr = result.replace(/\\u0026/g, "&").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
-    return JSON.parse(cleanStr);
-  } catch (e) {
-    return [];
-  }
-}
-__name(extractEpisodesList, "extractEpisodesList");
-function extractStream(html) {
-  const match2 = html.match(/\\?"stream\\?":\s*/);
-  if (!match2) return null;
-  const idx = match2.index;
-  const matchLen = match2[0].length;
-  let braceCount = 0;
-  let started = false;
-  let result = "";
-  for (let i = idx + matchLen; i < html.length; i++) {
-    const char = html[i];
-    if (char === "{") {
-      braceCount++;
-      started = true;
-    } else if (char === "}") {
-      braceCount--;
-    }
-    if (started) {
-      result += char;
-      if (braceCount === 0) break;
-    }
-  }
-  try {
-    const cleanStr = result.replace(/\\u0026/g, "&").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
-    return JSON.parse(cleanStr);
-  } catch (e) {
-    const sourceMatch = html.match(/"source"\s*:\s*"([^"]+)"/);
-    if (sourceMatch) {
-      return { source: sourceMatch[1].replace(/\\/g, "") };
-    }
-    return null;
-  }
-}
-__name(extractStream, "extractStream");
-async function getEpisodes13(anilistId, ctx = {}) {
-  const malId = await resolveMalId2(anilistId);
-  const html = await fetchHtml3(`${BASE11}/en/anime/${malId}`);
-  if (!html) throw new Error("AnimeDunya: episodes fetch failed");
-  let cdnBase = "https://cdn.anime-dunya.com/thumbnail/";
-  let cdnExt = "small.jpg";
-  const thumbMatch = html.match(/(https?:\/\/[^\s"'`<>]+?\/thumbnail\/)([a-zA-Z0-9]+?)\/((?:small|large)\.jpg)/);
-  if (thumbMatch) {
-    cdnBase = thumbMatch[1];
-    cdnExt = thumbMatch[3];
-  }
-  const episodes = extractEpisodesList(html);
-  const watchable = episodes.filter((ep) => ep.streamId !== null && ep.streamId !== void 0);
-  const sub = [];
-  for (const ep of watchable) {
-    const epNum = ep.episodeNumber;
-    const meta = episodeMeta(epNum, ctx);
-    const customTitle = Array.isArray(ep.translations) ? ep.translations.find((t) => t.language === "en")?.title : ep.translations?.title;
-    sub.push({
-      id: `watch/animedunya/${anilistId}/sub/animedunya-${epNum}`,
-      number: epNum,
-      title: customTitle || meta.title || `Episode ${epNum}`,
-      duration: meta.duration,
-      audio: "sub",
-      filler: ep.filler || meta.filler || false,
-      uncensored: false,
-      description: meta.description,
-      image: ep.streamId ? `${cdnBase}${ep.streamId}/${cdnExt}` : meta.image,
-      airDate: meta.airDate
-    });
-  }
-  sub.sort((a, b) => a.number - b.number);
-  return {
-    meta: {
-      title: ctx.media?.title?.english ?? ctx.media?.title?.romaji ?? null,
-      malId,
-      source: "animedunya"
-    },
-    episodes: { sub, dub: [] }
-  };
-}
-__name(getEpisodes13, "getEpisodes");
-async function handleWatch13(anilistId, audio, epNum) {
-  const malId = await resolveMalId2(anilistId);
-  const html = await fetchHtml3(`${BASE11}/en/play/${malId}/${epNum}`);
-  if (!html) return json({ error: "AnimeDunya watch fetch failed" }, 500);
-  const streamData = extractStream(html);
-  if (!streamData || !streamData.source) {
-    return json({ error: "AnimeDunya: stream source not found" }, 404);
-  }
-  const subtitles = (streamData.subtitles || []).map((s) => ({
-    url: s.src,
-    label: s.label,
-    srclang: s.srclang,
-    default: s.default || false
-  }));
-  const streams = [{
-    url: streamData.source,
-    type: "hls",
-    server: "AnimeDunya",
-    referer: `${BASE11}/`,
-    subtitles,
-    priority: 5,
-    isActive: true
-  }];
-  return json({
-    anilistId: Number(anilistId),
-    malId,
-    episode: Number(epNum),
-    audio,
-    streams
-  });
-}
-__name(handleWatch13, "handleWatch");
-var animedunya_default = {
-  async fetch(request) {
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET,OPTIONS",
-          "Access-Control-Allow-Headers": "*"
-        }
-      });
-    }
-    const url = new URL(request.url);
-    try {
-      const m = url.pathname.match(/^\/watch\/animedunya\/(\d+)\/(sub|dub)\/animedunya-(\d+)\/?$/);
-      if (m) return await handleWatch13(m[1], m[2], m[3]);
-      return json({ error: "Not found" }, 404);
-    } catch (err) {
-      return json({ error: err.message, stack: err.stack }, 500);
-    }
-  }
-};
-
 // core/episode-strategy.js
 var JIKAN2 = "https://api.jikan.moe/v4";
-var UA13 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+var UA9 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 var inflight2 = /* @__PURE__ */ new Map();
 var bgRunning = /* @__PURE__ */ new Set();
 function dedupe(key, fn) {
@@ -7473,7 +6111,7 @@ async function jikanPage(malId, pageNum, retries = 3) {
   for (let attempt = 0; attempt <= retries; attempt++) {
     const res = await fetch(
       `${JIKAN2}/anime/${malId}/episodes?page=${pageNum}`,
-      { headers: { "User-Agent": UA13, Accept: "application/json" } }
+      { headers: { "User-Agent": UA9, Accept: "application/json" } }
     ).catch(() => null);
     if (!res) return null;
     if (res.status === 429) {
@@ -7588,16 +6226,10 @@ var PROVIDER_ALIASES = {
   allmanga: "allmanga",
   reanime: "reanime",
   anikoto: "anikoto",
-  animegg: "animegg",
   anineko: "anineko",
-  anidbapp: "anidbapp",
   "2dhive": "2dhive",
   animenosub: "animenosub",
-  anizone: "anizone",
-  anibd: "anibd",
-  senshi: "senshi",
-  kaa: "kaa",
-  animedunya: "animedunya"
+  anizone: "anizone"
 };
 function resolveProviders(rawNames) {
   const resolved2 = /* @__PURE__ */ new Set();
@@ -7615,16 +6247,10 @@ function providerFns(anilistId, status, ctx) {
     allmanga: /* @__PURE__ */ __name(() => withCache(`epv:manga:${anilistId}`, status, () => getEpisodes2(anilistId, ctx)), "allmanga"),
     reanime: /* @__PURE__ */ __name(() => withCache(`epv:reanime:${anilistId}`, status, () => getEpisodes3(anilistId, ctx)), "reanime"),
     anikoto: /* @__PURE__ */ __name(() => withCache(`epv:anikoto:${anilistId}`, status, () => getEpisodes(anilistId, ctx)), "anikoto"),
-    animegg: /* @__PURE__ */ __name(() => withCache(`epv:animegg:${anilistId}`, status, () => getEpisodes4(anilistId, ctx)), "animegg"),
-    anineko: /* @__PURE__ */ __name(() => withCache(`epv:anineko:${anilistId}`, status, () => getEpisodes5(anilistId, ctx)), "anineko"),
-    anidbapp: /* @__PURE__ */ __name(() => withCache(`epv:anidbapp:${anilistId}`, status, () => getEpisodes6(anilistId, ctx)), "anidbapp"),
-    "2dhive": /* @__PURE__ */ __name(() => withCache(`epv:2dhive:${anilistId}`, status, () => getEpisodes7(anilistId, ctx)), "2dhive"),
-    animenosub: /* @__PURE__ */ __name(() => withCache(`epv:animenosub:${anilistId}`, status, () => getEpisodes8(anilistId, ctx)), "animenosub"),
-    anizone: /* @__PURE__ */ __name(() => withCache(`epv:anizone:${anilistId}`, status, () => getEpisodes9(anilistId, ctx)), "anizone"),
-    anibd: /* @__PURE__ */ __name(() => withCache(`epv:anibd:${anilistId}`, status, () => getEpisodes10(anilistId, ctx)), "anibd"),
-    senshi: /* @__PURE__ */ __name(() => withCache(`epv:senshi:${anilistId}`, status, () => getEpisodes11(anilistId, ctx)), "senshi"),
-    kaa: /* @__PURE__ */ __name(() => withCache(`epv:kaa:${anilistId}`, status, () => getEpisodes12(anilistId, ctx)), "kaa"),
-    animedunya: /* @__PURE__ */ __name(() => withCache(`epv:animedunya:${anilistId}`, status, () => getEpisodes13(anilistId, ctx)), "animedunya")
+    anineko: /* @__PURE__ */ __name(() => withCache(`epv:anineko:${anilistId}`, status, () => getEpisodes4(anilistId, ctx)), "anineko"),
+    "2dhive": /* @__PURE__ */ __name(() => withCache(`epv:2dhive:${anilistId}`, status, () => getEpisodes5(anilistId, ctx)), "2dhive"),
+    animenosub: /* @__PURE__ */ __name(() => withCache(`epv:animenosub:${anilistId}`, status, () => getEpisodes6(anilistId, ctx)), "animenosub"),
+    anizone: /* @__PURE__ */ __name(() => withCache(`epv:anizone:${anilistId}`, status, () => getEpisodes7(anilistId, ctx)), "anizone")
   };
 }
 __name(providerFns, "providerFns");
@@ -7648,35 +6274,19 @@ async function buildEpisodesWithCache(anilistId, media, anizip) {
   const malId = media?.idMal ?? null;
   const jikanEps = malId ? await fetchAllJikanWithCache(malId, status).catch(() => null) : null;
   const ctx = { media, anizip, jikanEps, maxPages: void 0 };
-  const [manga, reanime, anikoto, animegg, anineko, anidbapp, dhive, animenosub, anizone, anibd, senshi, kaa, animedunya] = await Promise.all([
+  const [manga, reanime, anikoto, anineko, dhive] = await Promise.all([
     safe("allmanga", () => withCache(`epv:manga:${anilistId}`, status, () => getEpisodes2(anilistId, ctx))),
     safe("reanime", () => withCache(`epv:reanime:${anilistId}`, status, () => getEpisodes3(anilistId, ctx))),
     safe("anikoto", () => withCache(`epv:anikoto:${anilistId}`, status, () => getEpisodes(anilistId, ctx))),
-    safe("animegg", () => withCache(`epv:animegg:${anilistId}`, status, () => getEpisodes4(anilistId, ctx))),
-    safe("anineko", () => withCache(`epv:anineko:${anilistId}`, status, () => getEpisodes5(anilistId, ctx))),
-    safe("anidbapp", () => withCache(`epv:anidbapp:${anilistId}`, status, () => getEpisodes6(anilistId, ctx))),
-    safe("2dhive", () => withCache(`epv:2dhive:${anilistId}`, status, () => getEpisodes7(anilistId, ctx))),
-    safe("animenosub", () => withCache(`epv:animenosub:${anilistId}`, status, () => getEpisodes8(anilistId, ctx))),
-    safe("anizone", () => withCache(`epv:anizone:${anilistId}`, status, () => getEpisodes9(anilistId, ctx))),
-    safe("anibd", () => withCache(`epv:anibd:${anilistId}`, status, () => getEpisodes10(anilistId, ctx))),
-    safe("senshi", () => withCache(`epv:senshi:${anilistId}`, status, () => getEpisodes11(anilistId, ctx))),
-    safe("kaa", () => withCache(`epv:kaa:${anilistId}`, status, () => getEpisodes12(anilistId, ctx))),
-    safe("animedunya", () => withCache(`epv:animedunya:${anilistId}`, status, () => getEpisodes13(anilistId, ctx)))
+    safe("anineko", () => withCache(`epv:anineko:${anilistId}`, status, () => getEpisodes4(anilistId, ctx))),
+    safe("2dhive", () => withCache(`epv:2dhive:${anilistId}`, status, () => getEpisodes5(anilistId, ctx)))
   ]);
   return {
     allmanga: manga.ok ? manga.data : { error: manga.error, stack: manga.stack },
     reanime: reanime.ok ? reanime.data : { error: reanime.error, stack: reanime.stack },
     anikoto: anikoto.ok ? anikoto.data : { error: anikoto.error, stack: anikoto.stack },
-    animegg: animegg.ok ? animegg.data : { error: animegg.error, stack: animegg.stack },
     anineko: anineko.ok ? anineko.data : { error: anineko.error, stack: anineko.stack },
-    anidbapp: anidbapp.ok ? anidbapp.data : { error: anidbapp.error, stack: anidbapp.stack },
-    "2dhive": dhive.ok ? dhive.data : { error: dhive.error, stack: dhive.stack },
-    animenosub: animenosub.ok ? animenosub.data : { error: animenosub.error, stack: animenosub.stack },
-    anizone: anizone.ok ? anizone.data : { error: anizone.error, stack: anizone.stack },
-    anibd: anibd.ok ? anibd.data : { error: anibd.error, stack: anibd.stack },
-    senshi: senshi.ok ? senshi.data : { error: senshi.error, stack: senshi.stack },
-    kaa: kaa.ok ? kaa.data : { error: kaa.error, stack: kaa.stack },
-    animedunya: animedunya.ok ? animedunya.data : { error: animedunya.error, stack: animedunya.stack }
+    "2dhive": dhive.ok ? dhive.data : { error: dhive.error, stack: dhive.stack }
   };
 }
 __name(buildEpisodesWithCache, "buildEpisodesWithCache");
@@ -7716,7 +6326,7 @@ function latestEpisodeFromResponse(data) {
 }
 __name(latestEpisodeFromResponse, "latestEpisodeFromResponse");
 function hasCurrentProviders(data) {
-  return data && Object.prototype.hasOwnProperty.call(data, "anidbapp") && Object.prototype.hasOwnProperty.call(data, "anizone");
+  return data && Object.prototype.hasOwnProperty.call(data, "reanime") && Object.prototype.hasOwnProperty.call(data, "anineko");
 }
 __name(hasCurrentProviders, "hasCurrentProviders");
 function latestEpisodeFromAniZip(anizip) {
@@ -7733,7 +6343,7 @@ function resolveShared(anilistId, freshMedia = false) {
 }
 __name(resolveShared, "resolveShared");
 async function clearProviderCache(anilistId, media) {
-  for (const p of ["pahe", "manga", "reanime", "anikoto", "animegg", "anineko", "anidbapp", "2dhive", "anizone"]) {
+  for (const p of ["manga", "reanime", "anikoto", "anineko", "2dhive", "animenosub", "anizone"]) {
     await delAsync(`epv:${p}:${anilistId}`);
   }
   if (media?.idMal) {
@@ -7986,15 +6596,11 @@ app.get("/watch/anikoto/:id/:audio/anikoto-:ep", async (c) => {
 });
 app.get("/watch/animegg/:id/:audio/animegg-:ep", async (c) => {
   const { id, audio, ep } = c.req.param();
-  return cachedWatch(c, `watch:animegg:${id}:${audio}:${ep}`, () => animegg_default.fetch(c.req.raw));
+  return cachedWatch(c, `watch:animegg:${id}:${audio}:${ep}`, () => animeggHandler.fetch(c.req.raw));
 });
 app.get("/watch/anineko/:id/:audio/anineko-:ep", async (c) => {
   const { id, audio, ep } = c.req.param();
   return cachedWatch(c, `watch:anineko:${id}:${audio}:${ep}`, () => anineko_default.fetch(c.req.raw));
-});
-app.get("/watch/anidbapp/:id/:audio/anidbapp-:ep", async (c) => {
-  const { id, audio, ep } = c.req.param();
-  return cachedWatch(c, `watch:anidbapp:${id}:${audio}:${ep}`, () => anidbapp_default.fetch(c.req.raw));
 });
 app.get("/watch/2dhive/:id/:audio/2dhive-:ep", async (c) => {
   const { id, audio, ep } = c.req.param();
@@ -8008,27 +6614,250 @@ app.get("/watch/anizone/:id/:audio/anizone-:ep", async (c) => {
   const { id, audio, ep } = c.req.param();
   return cachedWatch(c, `watch:anizone:${id}:${audio}:${ep}`, () => anizone_default.fetch(c.req.raw));
 });
-app.get("/watch/anibd/:id/:audio/anibd-:ep", async (c) => {
-  const { id, audio, ep } = c.req.param();
-  return cachedWatch(c, `watch:anibd:${id}:${audio}:${ep}`, () => anibd_default.fetch(c.req.raw));
-});
-app.get("/watch/senshi/:id/:audio/senshi-:ep", async (c) => {
-  const { id, audio, ep } = c.req.param();
-  return cachedWatch(c, `watch:senshi:${id}:${audio}:${ep}`, () => senshi_default.fetch(c.req.raw));
-});
-app.get("/watch/kaa/:id/:audio/kaa-:ep", async (c) => {
-  const { id, audio, ep } = c.req.param();
-  return cachedWatch(c, `watch:kaa:${id}:${audio}:${ep}`, () => kickassanime_default.fetch(c.req.raw));
-});
-app.get("/watch/animedunya/:id/:audio/animedunya-:ep", async (c) => {
-  const { id, audio, ep } = c.req.param();
-  return cachedWatch(c, `watch:animedunya:${id}:${audio}:${ep}`, () => animedunya_default.fetch(c.req.raw));
-});
 app.get("/stream/2dhive/:id/:audio/:ep", async (c) => {
   return dhive_default.fetch(c.req.raw);
 });
 app.get("/stream/2dhive/download/:id/:audio/:ep", async (c) => {
   return dhive_default.fetch(c.req.raw);
+});
+function normalizeReanime(rawRes) {
+  const data = rawRes;
+  const streams = [];
+  const subtitles = [];
+  let intro = { start: 0, end: 0 };
+  let outro = { start: 0, end: 0 };
+  if (data.stream_url) {
+    streams.push({ type: "hls", url: data.stream_url });
+  }
+  if (Array.isArray(data.streams)) {
+    for (const s of data.streams) {
+      if (s.url && s.type === "hls" && !streams.find((x) => x.url === s.url)) {
+        streams.push({ type: "hls", url: s.url });
+      }
+    }
+  }
+  if (Array.isArray(data.subtitles)) {
+    for (const s of data.subtitles) {
+      subtitles.push({ lang: s.lang || s.label || "Unknown", url: s.url || s.file || "" });
+    }
+  }
+  if (data.intro && (data.intro.start || data.intro.end)) {
+    intro = { start: Number(data.intro.start) || 0, end: Number(data.intro.end) || 0 };
+  } else if (data.intro_start || data.intro_end) {
+    intro = { start: Number(data.intro_start) || 0, end: Number(data.intro_end) || 0 };
+  }
+  if (data.outro && (data.outro.start || data.outro.end)) {
+    outro = { start: Number(data.outro.start) || 0, end: Number(data.outro.end) || 0 };
+  } else if (data.outro_start || data.outro_end) {
+    outro = { start: Number(data.outro_start) || 0, end: Number(data.outro_end) || 0 };
+  }
+  if (streams.length === 0) return null;
+  return { streams, subtitles, intro, outro };
+}
+__name(normalizeReanime, "normalizeReanime");
+function normalizeAnikoto(rawRes) {
+  const data = rawRes;
+  const streams = [];
+  const subtitles = [];
+  let intro = { start: 0, end: 0 };
+  let outro = { start: 0, end: 0 };
+  if (Array.isArray(data.streams)) {
+    for (const s of data.streams) {
+      if (s.url && (s.type === "hls" || s.url.includes(".m3u8"))) {
+        streams.push({ type: "hls", url: s.url });
+        if (s.intro && (s.intro.start || s.intro.end) && !intro.end) {
+          intro = { start: Number(s.intro.start) || 0, end: Number(s.intro.end) || 0 };
+        }
+        if (s.outro && (s.outro.start || s.outro.end) && !outro.end) {
+          outro = { start: Number(s.outro.start) || 0, end: Number(s.outro.end) || 0 };
+        }
+      }
+    }
+  }
+  if (Array.isArray(data.subtitles)) {
+    for (const s of data.subtitles) {
+      subtitles.push({ lang: s.lang || s.label || "Unknown", url: s.url || "" });
+    }
+  }
+  if (streams.length === 0) return null;
+  return { streams, subtitles, intro, outro };
+}
+__name(normalizeAnikoto, "normalizeAnikoto");
+function normalizeAllmanga(rawRes) {
+  const data = rawRes;
+  const streams = [];
+  let intro = { start: 0, end: 0 };
+  let outro = { start: 0, end: 0 };
+  if (Array.isArray(data.sources)) {
+    for (const s of data.sources) {
+      const url = s.extractedUrl || s.url;
+      if (url && (url.includes(".m3u8") || s.extractedType === "hls")) {
+        streams.push({ type: "hls", url });
+      }
+    }
+  }
+  if (data.intro && (data.intro.start || data.intro.end)) {
+    intro = { start: Number(data.intro.start) || 0, end: Number(data.intro.end) || 0 };
+  }
+  if (data.outro && (data.outro.start || data.outro.end)) {
+    outro = { start: Number(data.outro.start) || 0, end: Number(data.outro.end) || 0 };
+  }
+  if (streams.length === 0) return null;
+  return { streams, subtitles: [], intro, outro };
+}
+__name(normalizeAllmanga, "normalizeAllmanga");
+function normalizeAnineko(rawRes) {
+  const data = rawRes;
+  const streams = [];
+  if (Array.isArray(data.streams)) {
+    for (const s of data.streams) {
+      const url = s.url || s.m3u8;
+      if (url && (url.includes(".m3u8") || s.type === "hls")) {
+        streams.push({ type: "hls", url });
+      }
+    }
+  }
+  if (streams.length === 0) return null;
+  return { streams, subtitles: [], intro: { start: 0, end: 0 }, outro: { start: 0, end: 0 } };
+}
+__name(normalizeAnineko, "normalizeAnineko");
+function normalize2dhive(rawRes) {
+  const data = rawRes;
+  const streams = [];
+  const subtitles = [];
+  if (Array.isArray(data.streams)) {
+    for (const s of data.streams) {
+      if (s.url && (s.url.includes(".m3u8") || s.url.startsWith("/stream/"))) {
+        streams.push({ type: "hls", url: s.url });
+      }
+      if (s.subtitle) {
+        subtitles.push({ lang: "English", url: s.subtitle });
+      }
+    }
+  }
+  if (streams.length === 0) return null;
+  return { streams, subtitles, intro: { start: 0, end: 0 }, outro: { start: 0, end: 0 } };
+}
+__name(normalize2dhive, "normalize2dhive");
+function normalizeAnimenosub(rawRes) {
+  const data = rawRes;
+  const streams = [];
+  if (Array.isArray(data.streams)) {
+    for (const s of data.streams) {
+      if (s.url && (s.type === "hls" || s.url.includes(".m3u8"))) {
+        streams.push({ type: "hls", url: s.url });
+      }
+    }
+  }
+  if (streams.length === 0) return null;
+  return { streams, subtitles: [], intro: { start: 0, end: 0 }, outro: { start: 0, end: 0 } };
+}
+__name(normalizeAnimenosub, "normalizeAnimenosub");
+function normalizeAnizone(rawRes) {
+  const data = rawRes;
+  const streams = [];
+  const subtitles = [];
+  if (Array.isArray(data.streams)) {
+    for (const s of data.streams) {
+      if (s.url && (s.type === "hls" || s.url.includes(".m3u8"))) {
+        streams.push({ type: "hls", url: s.url });
+        if (Array.isArray(s.subtitles)) {
+          for (const sub of s.subtitles) {
+            subtitles.push({ lang: sub.label || sub.srclang || "Unknown", url: sub.url || "" });
+          }
+        }
+      }
+    }
+  }
+  if (streams.length === 0) return null;
+  return { streams, subtitles, intro: { start: 0, end: 0 }, outro: { start: 0, end: 0 } };
+}
+__name(normalizeAnizone, "normalizeAnizone");
+async function tryProvider(handler, path) {
+  try {
+    const fakeUrl = new URL(`https://dummy${path}`);
+    const fakeReq = new Request(fakeUrl.toString(), { method: "GET" });
+    const res = await handler.fetch(fakeReq);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+__name(tryProvider, "tryProvider");
+app.get("/api/watch/:anilistId/:lang/:ep", async (c) => {
+  const anilistId = c.req.param("anilistId");
+  const lang = c.req.param("lang");
+  const ep = c.req.param("ep");
+  const audio = lang === "dub" ? "dub" : "sub";
+  const episodeKey = `ep_${ep}`;
+  const cacheKey = `apiwatch:${anilistId}:${audio}:${ep}`;
+  const cached = await getAsync(cacheKey);
+  if (cached && isFresh(cached)) {
+    c.header("Cache-Control", "public, max-age=300");
+    return c.json(cached.data);
+  }
+  const providers = [
+    {
+      name: "reanime",
+      handler: reanime_default2,
+      path: `/watch/${anilistId}/${audio}/${ep}`,
+      normalize: normalizeReanime
+    },
+    {
+      name: "anikoto",
+      handler: anikoto_default,
+      path: `/watch/anikoto/${anilistId}/${audio}/anikoto-${ep}`,
+      normalize: normalizeAnikoto
+    },
+    {
+      name: "allmanga",
+      handler: allmanga_default2,
+      path: `/watch/allmanga/${anilistId}/${audio}/allmanga-${ep}`,
+      normalize: normalizeAllmanga
+    },
+    {
+      name: "anineko",
+      handler: anineko_default,
+      path: `/watch/anineko/${anilistId}/${audio}/anineko-${ep}`,
+      normalize: normalizeAnineko
+    },
+    {
+      name: "2dhive",
+      handler: dhive_default,
+      path: `/watch/2dhive/${anilistId}/${audio}/2dhive-${ep}`,
+      normalize: normalize2dhive
+    },
+    {
+      name: "animenosub",
+      handler: animenosub_default,
+      path: `/watch/animenosub/${anilistId}/${audio}/animenosub-${ep}`,
+      normalize: normalizeAnimenosub
+    },
+    {
+      name: "anizone",
+      handler: anizone_default,
+      path: `/watch/anizone/${anilistId}/${audio}/anizone-${ep}`,
+      normalize: normalizeAnizone
+    }
+  ];
+  for (const provider of providers) {
+    try {
+      const rawData = await tryProvider(provider.handler, provider.path);
+      if (!rawData || rawData.error) continue;
+      const normalized = provider.normalize(rawData);
+      if (!normalized || normalized.streams.length === 0) continue;
+      const result = { [episodeKey]: normalized };
+      await setAsync(cacheKey, result, WATCH_TTL).catch(() => {
+      });
+      c.header("Cache-Control", "public, max-age=300");
+      c.header("X-Provider", provider.name);
+      return c.json(result);
+    } catch {
+      continue;
+    }
+  }
+  return c.json({ error: "No streams found from any provider", anilistId, episode: ep, audio }, 404);
 });
 app.get("/", (c) => {
   return json4(c, {
@@ -8038,37 +6867,26 @@ app.get("/", (c) => {
       "allmanga",
       "reanime",
       "anikoto",
-      "animegg",
       "anineko",
-      "anidbapp",
       "2dhive",
       "animenosub",
-      "anizone",
-      "anibd",
-      "senshi",
-      "kaa",
-      "animedunya"
+      "anizone"
     ],
     routes: [
       "/map/:anilistId",
       "/episodes/:anilistId",
       "/episodes/:provider[/:provider...]/:anilistId?map=true|false",
+      "/api/watch/:anilistId/:lang/:ep",
       "/watch/allmanga/:id/sub|dub/allmanga-:ep",
       "/watch/reanime/:id/sub|dub/reanime-:ep",
       "/stream/reanime/:id/sub|dub/:ep",
       "/watch/anikoto/:id/sub|dub/anikoto-:ep",
-      "/watch/animegg/:id/sub|dub/animegg-:ep",
       "/watch/anineko/:id/sub|dub/anineko-:ep",
-      "/watch/anidbapp/:id/sub|dub/anidbapp-:ep",
       "/watch/2dhive/:id/sub|dub/2dhive-:ep",
       "/stream/2dhive/:id/sub|dub/:ep",
       "/stream/2dhive/download/:id/sub|dub/:ep",
       "/watch/animenosub/:id/sub|dub/animenosub-:ep",
-      "/watch/anizone/:id/sub|dub/anizone-:ep",
-      "/watch/anibd/:id/sub|dub/anibd-:ep",
-      "/watch/senshi/:id/sub|dub/senshi-:ep",
-      "/watch/kaa/:id/sub|dub/kaa-:ep",
-      "/watch/animedunya/:id/sub|dub/animedunya-:ep"
+      "/watch/anizone/:id/sub|dub/anizone-:ep"
     ]
   });
 });
