@@ -179,6 +179,62 @@ app.get('/stream/2dhive/download/:id/:audio/:ep', async (c) => {
 // Sequential fallback across 7 providers; normalizes to frontend's expected format:
 // { "ep_X": { streams: [...], subtitles: [...], intro: {}, outro: {} } }
 
+const LANG_CODES = {
+  eng: "English", en: "English", english: "English",
+  jpn: "Japanese", ja: "Japanese", japanese: "Japanese",
+  spa: "Spanish", es: "Spanish", spanish: "Spanish",
+  fre: "French", fr: "French", french: "French",
+  ger: "German", de: "German", german: "German",
+  por: "Portuguese", pt: "Portuguese", portuguese: "Portuguese",
+  ita: "Italian", it: "Italian", italian: "Italian",
+  ara: "Arabic", ar: "Arabic", arabic: "Arabic",
+  rus: "Russian", ru: "Russian", russian: "Russian",
+  kor: "Korean", ko: "Korean", korean: "Korean",
+  chi: "Chinese", zh: "Chinese", chinese: "Chinese",
+  hin: "Hindi", hi: "Hindi", hindi: "Hindi",
+  tur: "Turkish", tr: "Turkish", turkish: "Turkish",
+  pol: "Polish", pl: "Polish", polish: "Polish",
+  dut: "Dutch", nl: "Dutch", dutch: "Dutch",
+  vie: "Vietnamese", vi: "Vietnamese", vietnamese: "Vietnamese",
+  tha: "Thai", th: "Thai", thai: "Thai",
+  ind: "Indonesian", id: "Indonesian", indonesian: "Indonesian",
+  may: "Malay", ms: "Malay", malay: "Malay",
+  rum: "Romanian", ro: "Romanian", romanian: "Romanian",
+  hun: "Hungarian", hu: "Hungarian", hungarian: "Hungarian",
+  gre: "Greek", el: "Greek", greek: "Greek",
+  heb: "Hebrew", he: "Hebrew", hebrew: "Hebrew",
+  swe: "Swedish", sv: "Swedish", swedish: "Swedish",
+  cze: "Czech", cs: "Czech", czech: "Czech",
+  fin: "Finnish", fi: "Finnish", finnish: "Finnish",
+};
+
+function detectSubLang(sub) {
+  // 1. Direct fields
+  if (sub.lang && sub.lang !== "Unknown") return sub.lang;
+  if (sub.label) return sub.label;
+  if (sub.srclang) {
+    const mapped = LANG_CODES[sub.srclang.toLowerCase()];
+    if (mapped) return mapped;
+    return sub.srclang;
+  }
+  // 2. Extract from URL filename: ..._eng_5.ass or ..._eng.srt
+  const url = sub.url || sub.file || "";
+  const filename = url.split("/").pop() || "";
+  const langMatch = filename.match(/[_.-]([a-z]{2,3})[_.-]?\d*\.[a-z]{2,4}$/i);
+  if (langMatch) {
+    const code = langMatch[1].toLowerCase();
+    if (LANG_CODES[code]) return LANG_CODES[code];
+  }
+  // 3. Check anywhere in the URL for common patterns
+  const urlLower = url.toLowerCase();
+  for (const [code, name] of Object.entries(LANG_CODES)) {
+    if (code.length >= 3 && urlLower.includes(`_${code}`) || urlLower.includes(`/${code}/`) || urlLower.includes(`-${code}.`) || urlLower.includes(`-${code}_`)) {
+      return name;
+    }
+  }
+  return "Unknown";
+}
+
 function normalizeReanime(rawRes) {
   const data = rawRes;
   const streams = [];
@@ -201,7 +257,7 @@ function normalizeReanime(rawRes) {
   // Subtitles
   if (Array.isArray(data.subtitles)) {
     for (const s of data.subtitles) {
-      subtitles.push({ lang: s.lang || s.label || "Unknown", url: s.url || s.file || "" });
+      subtitles.push({ lang: detectSubLang(s), url: s.url || s.file || "" });
     }
   }
   // Intro/Outro — prefer intro_chapter, fallback to numeric fields
@@ -243,7 +299,7 @@ function normalizeAnikoto(rawRes) {
   }
   if (Array.isArray(data.subtitles)) {
     for (const s of data.subtitles) {
-      subtitles.push({ lang: s.lang || s.label || "Unknown", url: s.url || "" });
+      subtitles.push({ lang: detectSubLang(s), url: s.url || "" });
     }
   }
 
@@ -340,7 +396,7 @@ function normalizeAnizone(rawRes) {
         streams.push({ type: "hls", url: s.url });
         if (Array.isArray(s.subtitles)) {
           for (const sub of s.subtitles) {
-            subtitles.push({ lang: sub.label || sub.srclang || "Unknown", url: sub.url || "" });
+            subtitles.push({ lang: detectSubLang(sub), url: sub.url || "" });
           }
         }
       }
