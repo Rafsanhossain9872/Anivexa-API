@@ -504,6 +504,48 @@ app.get('/api/watch/:anilistId/:lang/:ep', async (c) => {
   return c.json({ error: "No streams found from any provider", anilistId, episode: ep, audio }, 404);
 });
 
+app.get('/api/proxy', async (c) => {
+  const url = c.req.query('url');
+  const referer = c.req.query('referer');
+  if (!url) return c.json({ error: 'URL required' }, 400);
+
+  const headers = new Headers();
+  headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+  headers.set('Accept', '*/*');
+  headers.set('Accept-Language', 'en-US,en;q=0.9');
+  headers.set('Sec-Fetch-Dest', 'empty');
+  headers.set('Sec-Fetch-Mode', 'cors');
+  headers.set('Sec-Fetch-Site', 'cross-site');
+
+  let targetOrigin = '';
+  try {
+    targetOrigin = new URL(url).origin;
+  } catch (e) {}
+
+  if (referer) {
+    headers.set('Referer', referer);
+    try { headers.set('Origin', new URL(referer).origin); } catch(e) {}
+  } else if (targetOrigin) {
+    headers.set('Referer', targetOrigin + '/');
+    headers.set('Origin', targetOrigin);
+  }
+
+  try {
+    const response = await fetch(url, { headers });
+    const responseHeaders = new Headers(response.headers);
+    responseHeaders.set('Access-Control-Allow-Origin', '*');
+    // Remove strict CORS headers from target if they exist
+    responseHeaders.delete('Access-Control-Allow-Credentials');
+    
+    return new Response(response.body, {
+      status: response.status,
+      headers: responseHeaders
+    });
+  } catch (e) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
 app.get('/', (c) => {
   return json(c, {
     name: "Anivexa API 2.1 (Hono Edition)",
