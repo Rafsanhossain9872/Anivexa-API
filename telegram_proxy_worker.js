@@ -8,6 +8,7 @@
 
 // We will use Cloudflare's Cache API to dramatically reduce Telegram API hits
 const CACHE_TTL = 604800; // Cache for 7 days
+const BOT_TOKEN = "8769189468:AAFe5fWcb-TIXUOkT3N-HIPU_QCnGgqo-a4";
 
 export default {
   async fetch(request, env, ctx) {
@@ -45,15 +46,6 @@ async function handleStreamRequest(request, fileIdentifier, env, ctx) {
     return new Response(null, { headers: corsHeaders });
   }
 
-  // Ensure BOT_TOKEN is present and clean
-  if (!env.BOT_TOKEN) {
-    return new Response(JSON.stringify({ error: "Missing BOT_TOKEN secret in worker environment" }), {
-      status: 500,
-      headers: { "Content-Type": "application/json", ...corsHeaders }
-    });
-  }
-  const cleanToken = env.BOT_TOKEN.replace(/^bot/i, '').trim();
-
   const cache = caches.default;
   const cacheKey = new Request(request.url);
   
@@ -71,7 +63,7 @@ async function handleStreamRequest(request, fileIdentifier, env, ctx) {
 
     // 2. If the identifier is a file_id (doesn't contain a '/'), we must resolve it to a file_path first
     if (!fileIdentifier.includes('/')) {
-      const tgApiUrl = `https://api.telegram.org/bot${cleanToken}/getFile?file_id=${fileIdentifier}`;
+      const tgApiUrl = `https://api.telegram.org/bot${BOT_TOKEN}/getFile?file_id=${fileIdentifier}`;
       
       const fileRes = await fetch(tgApiUrl);
       const fileData = await fileRes.json();
@@ -86,7 +78,7 @@ async function handleStreamRequest(request, fileIdentifier, env, ctx) {
     }
 
     // 3. Stream the actual file from Telegram's content servers
-    const tgFileUrl = `https://api.telegram.org/file/bot${cleanToken}/${filePath}`;
+    const tgFileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
     
     // We forward the Range header to allow seeking in the video player
     const fetchHeaders = new Headers();
