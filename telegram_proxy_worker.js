@@ -15,9 +15,20 @@ export default {
     const url = new URL(request.url);
     const pathSegments = url.pathname.split('/').filter(Boolean);
 
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Range, Authorization",
+      "Access-Control-Expose-Headers": "Content-Length, Content-Range",
+    };
+
+    if (request.method === "OPTIONS") {
+      return new Response(null, { headers: corsHeaders });
+    }
+
     // Basic routing
     if (pathSegments.length === 0) {
-      return new Response("Tenzora Edge Proxy is Online", { status: 200 });
+      return new Response("Tenzora Edge Proxy is Online", { status: 200, headers: corsHeaders });
     }
 
     // Expected URL format: /stream/<file_id_or_path>
@@ -25,7 +36,7 @@ export default {
       return handleStreamRequest(request, pathSegments[1], env, ctx);
     }
 
-    return new Response("Not Found", { status: 404 });
+    return new Response("Not Found", { status: 404, headers: corsHeaders });
   }
 };
 
@@ -36,9 +47,9 @@ async function handleStreamRequest(request, fileIdentifier, env, ctx) {
   // CORS Headers required for frontend P2P/HLS player
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-    "Access-Control-Allow-Headers": "Range, Content-Type",
-    "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
+    "Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Range, Authorization",
+    "Access-Control-Expose-Headers": "Content-Length, Content-Range",
   };
 
   // Handle preflight requests
