@@ -45,6 +45,15 @@ async function handleStreamRequest(request, fileIdentifier, env, ctx) {
     return new Response(null, { headers: corsHeaders });
   }
 
+  // Ensure BOT_TOKEN is present and clean
+  if (!env.BOT_TOKEN) {
+    return new Response(JSON.stringify({ error: "Missing BOT_TOKEN secret in worker environment" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json", ...corsHeaders }
+    });
+  }
+  const cleanToken = env.BOT_TOKEN.replace(/^bot/i, '').trim();
+
   const cache = caches.default;
   const cacheKey = new Request(request.url);
   
@@ -62,7 +71,7 @@ async function handleStreamRequest(request, fileIdentifier, env, ctx) {
 
     // 2. If the identifier is a file_id (doesn't contain a '/'), we must resolve it to a file_path first
     if (!fileIdentifier.includes('/')) {
-      const tgApiUrl = `https://api.telegram.org/bot${env.BOT_TOKEN}/getFile?file_id=${fileIdentifier}`;
+      const tgApiUrl = `https://api.telegram.org/bot${cleanToken}/getFile?file_id=${fileIdentifier}`;
       
       const fileRes = await fetch(tgApiUrl);
       const fileData = await fileRes.json();
@@ -77,7 +86,7 @@ async function handleStreamRequest(request, fileIdentifier, env, ctx) {
     }
 
     // 3. Stream the actual file from Telegram's content servers
-    const tgFileUrl = `https://api.telegram.org/file/bot${env.BOT_TOKEN}/${filePath}`;
+    const tgFileUrl = `https://api.telegram.org/file/bot${cleanToken}/${filePath}`;
     
     // We forward the Range header to allow seeking in the video player
     const fetchHeaders = new Headers();
