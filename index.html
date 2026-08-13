@@ -488,8 +488,10 @@
                 });
 
                 p2pml.hlsjs.initHlsJsPlayer(hls);
-                hls.loadSource(source);
                 hls.attachMedia(video);
+                hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+                    hls.loadSource(source);
+                });
 
                 // Stats
                 let peerCount = 0;
@@ -522,7 +524,12 @@
 
             function togglePlay() {
                 if (video.paused) {
-                    video.play();
+                    const playPromise = video.play();
+                    if (playPromise !== undefined) {
+                        playPromise.catch(error => {
+                            console.log("Playback prevented or interrupted:", error);
+                        });
+                    }
                 } else {
                     video.pause();
                 }
