@@ -8,7 +8,7 @@
 
 // We will use Cloudflare's Cache API to dramatically reduce Telegram API hits
 const CACHE_TTL = 604800; // Cache for 7 days
-const BOT_TOKEN = "8769189468:AAFe5fWcb-TIXUOkT3N-HIPU_QCnGgqo-a4";
+const BOT_TOKEN = "8532496824:AAEYckkTeuO1JzV7r7G1YGcMSqbscaO4bmc";
 
 export default {
   async fetch(request, env, ctx) {
