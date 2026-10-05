@@ -10,11 +10,24 @@ import aninekoHandler              from "./providers/anineko.js";
 import dhiveHandler                from "./providers/2dhive.js";
 import animenosubHandler           from "./providers/animenosub.js";
 import anizoneHandler              from "./providers/anizone.js";
+import animeggHandler              from './providers/animegg.js';
+import { mediaProxy, fetchMedia, readPlaylist, resolveHLS } from './core/media-proxy.js';
+import { toWebVTT } from './core/subtitles.js';
+import { withDeadline, withRequestBudget } from './core/network.js';
+import anibdHandler from './providers/anibd.js';
+import anidbappHandler from './providers/anidbapp.js';
+import kaaHandler from './providers/kickassanime.js';
+import animedunyaHandler from './providers/animedunya.js';
 import { getEpisodesResponse, getFilteredEpisodesResponse } from "./core/episode-cache.js";
 import { resolveProviders }         from "./core/episode-strategy.js";
-import { getAsync, setAsync, isFresh, mapTTL, WATCH_TTL, _CACHE_ENABLED } from "./core/smartcache.js";
+import { getAsync, setAsync, isFresh, mapTTL, WATCH_TTL, _CACHE_ENABLED, configureCache } from "./core/smartcache.js";
 
 const app = new Hono();
+app.use('*', async (c, next) => {
+  configureCache(c.env);
+  const edge = typeof WebSocketPair !== 'undefined';
+  await withRequestBudget(next, edge ? 40 : 150, edge ? c.executionCtx.waitUntil.bind(c.executionCtx) : undefined);
+});
 
 app.use('*', cors({
   origin: '*',
@@ -23,7 +36,7 @@ app.use('*', cors({
 }));
 
 function json(c, data, status = 200) {
-  c.header("Cache-Control", "public, max-age=300");
+  c.header("Cache-Control", status >= 400 ? 'no-store' : 'public, max-age=300');
   return c.json(data, status);
 }
 
@@ -44,7 +57,7 @@ async function cachedWatch(c, cacheKey, handlerFn) {
     const warm = await getAsync(cacheKey);
     if (warm && isFresh(warm)) return json(c, warm.data);
     const res = await handlerFn();
-    c.header("Cache-Control", "public, max-age=300");
+    c.header("Cache-Control", "no-store");
     return new Response(res.body, res);
   }
 
@@ -53,7 +66,7 @@ async function cachedWatch(c, cacheKey, handlerFn) {
     if (response.status === 200) {
       try {
         const data = await response.clone().json();
-        await setAsync(cacheKey, data, WATCH_TTL);
+        if (!data?.error) await setAsync(cacheKey, data, Math.min(WATCH_TTL, 5 * 60 * 1000));
       } catch {}
     }
     return response;
@@ -62,7 +75,7 @@ async function cachedWatch(c, cacheKey, handlerFn) {
   watchInflight.set(cacheKey, promise);
   try { 
     const res = await promise; 
-    c.header("Cache-Control", "public, max-age=300");
+    c.header("Cache-Control", "no-store");
     return new Response(res.body, res);
   } finally { 
     watchInflight.delete(cacheKey); 
@@ -91,7 +104,7 @@ app.get('/map/:anilistId', async (c) => {
 app.get('/episodes/:anilistId{[0-9]+}', async (c) => {
   const anilistId = c.req.param('anilistId');
   try {
-    return json(c, await getEpisodesResponse(anilistId, c.env));
+    return json(c, await getEpisodesResponse(anilistId, { ...c.env, waitUntil: typeof WebSocketPair !== 'undefined' ? c.executionCtx.waitUntil.bind(c.executionCtx) : undefined }));
   } catch (e) {
     return json(c, { error: e.message }, 500);
   }
@@ -122,14 +135,14 @@ app.get('/episodes/*', async (c) => {
   return c.notFound();
 });
 
-app.get('/watch/allmanga/:id/:audio/allmanga-:ep', async (c) => {
+app.get('/watch/allmanga/:id/:audio/:ep{allmanga-[0-9]+}', async (c) => {
   const { id, audio, ep } = c.req.param();
   return cachedWatch(c, `watch:manga:${id}:${audio}:${ep}`, () => mangaHandler.fetch(c.req.raw));
 });
 
-app.get('/watch/reanime/:id/:audio/reanime-:ep', async (c) => {
+app.get('/watch/reanime/:id/:audio/:ep{reanime-[0-9]+}', async (c) => {
   const { id, audio, ep } = c.req.param();
-  return cachedWatch(c, `watch:reanime:${id}:${audio}:${ep}`, () => reanimeHandler.fetch(rewriteRequest(c.req.raw, `/watch/${id}/${audio}/${ep}`)));
+  return cachedWatch(c, `watch:reanime:${id}:${audio}:${ep}`, () => reanimeHandler.fetch(rewriteRequest(c.req.raw, `/watch/${id}/${audio}/${ep.replace('reanime-', '')}`)));
 });
 
 app.get('/stream/reanime/:id/:audio/:ep', async (c) => {
@@ -137,32 +150,32 @@ app.get('/stream/reanime/:id/:audio/:ep', async (c) => {
   return reanimeHandler.fetch(rewriteRequest(c.req.raw, `/stream/${id}/${audio}/${ep}`));
 });
 
-app.get('/watch/anikoto/:id/:audio/anikoto-:ep', async (c) => {
+app.get('/watch/anikoto/:id/:audio/:ep{anikoto-[0-9]+}', async (c) => {
   const { id, audio, ep } = c.req.param();
   return cachedWatch(c, `watch:anikoto:${id}:${audio}:${ep}`, () => anikotoHandler.fetch(c.req.raw));
 });
 
-app.get('/watch/animegg/:id/:audio/animegg-:ep', async (c) => {
+app.get('/watch/animegg/:id/:audio/:ep{animegg-[0-9]+}', async (c) => {
   const { id, audio, ep } = c.req.param();
   return cachedWatch(c, `watch:animegg:${id}:${audio}:${ep}`, () => animeggHandler.fetch(c.req.raw));
 });
 
-app.get('/watch/anineko/:id/:audio/anineko-:ep', async (c) => {
+app.get('/watch/anineko/:id/:audio/:ep{anineko-[0-9]+}', async (c) => {
   const { id, audio, ep } = c.req.param();
   return cachedWatch(c, `watch:anineko:${id}:${audio}:${ep}`, () => aninekoHandler.fetch(c.req.raw));
 });
 
-app.get('/watch/2dhive/:id/:audio/2dhive-:ep', async (c) => {
+app.get('/watch/2dhive/:id/:audio/:ep{2dhive-[0-9]+}', async (c) => {
   const { id, audio, ep } = c.req.param();
   return cachedWatch(c, `watch:2dhive:${id}:${audio}:${ep}`, () => dhiveHandler.fetch(c.req.raw));
 });
 
-app.get('/watch/animenosub/:id/:audio/animenosub-:ep', async (c) => {
+app.get('/watch/animenosub/:id/:audio/:ep{animenosub-[0-9]+}', async (c) => {
   const { id, audio, ep } = c.req.param();
   return cachedWatch(c, `watch:animenosub:${id}:${audio}:${ep}`, () => animenosubHandler.fetch(c.req.raw));
 });
 
-app.get('/watch/anizone/:id/:audio/anizone-:ep', async (c) => {
+app.get('/watch/anizone/:id/:audio/:ep{anizone-[0-9]+}', async (c) => {
   const { id, audio, ep } = c.req.param();
   return cachedWatch(c, `watch:anizone:${id}:${audio}:${ep}`, () => anizoneHandler.fetch(c.req.raw));
 });
@@ -176,6 +189,9 @@ app.get('/stream/2dhive/download/:id/:audio/:ep', async (c) => {
 });
 
 // ── /api/watch — Server 1 Unified Endpoint ──
+for (const [name, handler] of [['anibd', anibdHandler], ['anidbapp', anidbappHandler], ['kaa', kaaHandler], ['animedunya', animedunyaHandler]]) {
+  app.get(`/watch/${name}/:id/:audio/:ep{${name}-[0-9]+}`, async c => cachedWatch(c, `watch:${name}:${c.req.param('id')}:${c.req.param('audio')}:${c.req.param('ep')}`, () => withDeadline(() => handler.fetch(c.req.raw))));
+}
 // Sequential fallback across 7 providers; normalizes to frontend's expected format:
 // { "ep_X": { streams: [...], subtitles: [...], intro: {}, outro: {} } }
 
@@ -243,18 +259,18 @@ function normalizeReanime(rawRes) {
   let outro = { start: 0, end: 0 };
 
   // Include redirect_url (Worker /stream endpoint that 302s to the raw stream)
-  if (data.redirect_url) {
+  if (data.redirect_url && !data.stream_url) {
     streams.push({ type: "hls", url: data.redirect_url });
   }
   // Primary HLS from stream_url
   if (data.stream_url) {
-    streams.push({ type: "hls", url: data.stream_url });
+    streams.push({ type: "hls", url: data.stream_url, referer: data.referer || 'https://flixcloud.cc/' });
   }
   // Additional streams array
   if (Array.isArray(data.streams)) {
     for (const s of data.streams) {
       if (s.url && !streams.find(x => x.url === s.url)) {
-        streams.push({ type: s.type || "hls", url: s.url });
+        streams.push({ ...s, type: s.type || "hls", url: s.url });
       }
     }
   }
@@ -298,7 +314,7 @@ function normalizeAnikoto(rawRes) {
   if (Array.isArray(data.streams)) {
     for (const s of data.streams) {
       if (s.url && (s.type === "hls" || s.url.includes(".m3u8"))) {
-        streams.push({ type: "hls", url: s.url });
+        streams.push({ ...s, type: "hls", url: s.url });
         // Grab intro/outro from the first HLS stream
         if (s.intro && (s.intro.start || s.intro.end) && !intro.end) {
           intro = { start: Number(s.intro.start) || 0, end: Number(s.intro.end) || 0 };
@@ -329,7 +345,7 @@ function normalizeAllmanga(rawRes) {
     for (const s of data.sources) {
       const url = s.extractedUrl || s.url;
       if (url && (url.includes(".m3u8") || s.extractedType === "hls")) {
-        streams.push({ type: "hls", url });
+        streams.push({ ...s, type: "hls", url });
       }
     }
   }
@@ -352,7 +368,7 @@ function normalizeAnineko(rawRes) {
     for (const s of data.streams) {
       const url = s.url || s.m3u8;
       if (url && (url.includes(".m3u8") || s.type === "hls")) {
-        streams.push({ type: "hls", url });
+        streams.push({ ...s, type: "hls", url });
       }
     }
   }
@@ -369,7 +385,7 @@ function normalize2dhive(rawRes) {
   if (Array.isArray(data.streams)) {
     for (const s of data.streams) {
       if (s.url && (s.url.includes(".m3u8") || s.url.startsWith("/stream/"))) {
-        streams.push({ type: "hls", url: s.url });
+        streams.push({ ...s, type: "hls", url: s.url });
       }
       if (s.subtitle) {
         subtitles.push({ lang: "English", url: s.subtitle });
@@ -388,7 +404,7 @@ function normalizeAnimenosub(rawRes) {
   if (Array.isArray(data.streams)) {
     for (const s of data.streams) {
       if (s.url && (s.type === "hls" || s.url.includes(".m3u8"))) {
-        streams.push({ type: "hls", url: s.url });
+        streams.push({ ...s, type: "hls", url: s.url });
       }
     }
   }
@@ -405,7 +421,7 @@ function normalizeAnizone(rawRes) {
   if (Array.isArray(data.streams)) {
     for (const s of data.streams) {
       if (s.url && (s.type === "hls" || s.url.includes(".m3u8"))) {
-        streams.push({ type: "hls", url: s.url });
+        streams.push({ ...s, type: "hls", url: s.url });
         if (Array.isArray(s.subtitles)) {
           for (const sub of s.subtitles) {
             subtitles.push({ lang: detectSubLang(sub), url: sub.url || "" });
@@ -419,11 +435,11 @@ function normalizeAnizone(rawRes) {
   return { streams, subtitles, intro: { start: 0, end: 0 }, outro: { start: 0, end: 0 } };
 }
 
-async function tryProvider(handler, path) {
+async function tryProvider(handler, path, origin) {
   try {
-    const fakeUrl = new URL(`https://dummy${path}`);
-    const fakeReq = new Request(fakeUrl.toString(), { method: "GET" });
-    const res = await handler.fetch(fakeReq);
+    const fakeUrl = new URL(path, origin);
+    const fakeReq = new Request(fakeUrl.toString(), { method: "GET", signal: AbortSignal.timeout(15000) });
+    const res = await withDeadline(() => handler.fetch(fakeReq));
     if (!res.ok) return null;
     return await res.json();
   } catch {
@@ -496,11 +512,12 @@ app.get('/api/watch/:anilistId/:lang/:ep', async (c) => {
 
   for (const provider of providers) {
     try {
-      const rawData = await tryProvider(provider.handler, provider.path);
+      const rawData = await tryProvider(provider.handler, provider.path, new URL(c.req.url).origin);
       if (!rawData || rawData.error) continue;
 
       const normalized = provider.normalize(rawData);
       if (!normalized || normalized.streams.length === 0) continue;
+      for (const stream of normalized.streams) stream.url = new URL(stream.url, c.req.url).href;
 
       const result = { [episodeKey]: normalized };
 
@@ -537,205 +554,66 @@ app.get('/api/hls/:anilistId/:lang/:ep', async (c) => {
     { name: "anizone", handler: anizoneHandler, path: `/watch/anizone/${anilistId}/${audio}/anizone-${ep}`, normalize: normalizeAnizone },
   ];
 
-  let streamUrl = null;
-  let referer = '';
-
   for (const provider of providers) {
     try {
-      const rawData = await tryProvider(provider.handler, provider.path);
+      const rawData = await tryProvider(provider.handler, provider.path, new URL(c.req.url).origin);
       if (!rawData || rawData.error) continue;
       const normalized = provider.normalize(rawData);
       if (!normalized || normalized.streams.length === 0) continue;
-      const hlsStream = normalized.streams.find(s => s.type === 'hls' || (s.url && s.url.includes('.m3u8')));
-      if (hlsStream) {
-        streamUrl = hlsStream.url;
-        referer = hlsStream.referer || '';
-        break;
+      for (const stream of normalized.streams.filter(s => s.type === 'hls' || s.url?.includes('.m3u8'))) {
+        try {
+          const response = await resolveHLS(new URL(stream.url, c.req.url).href, `${new URL(c.req.url).origin}/api/proxy`, stream.referer || stream.headers?.Referer || '', c.env);
+          response.headers.set('X-Provider', provider.name);
+          return response;
+        } catch { /* Try the next stream/provider after inaccessible or invalid playlists. */ }
       }
     } catch { continue; }
   }
+  return json(c, { error: 'No accessible HLS playlist was found' }, 502);
+});
 
-  if (!streamUrl) {
-    return c.json({ error: "No HLS streams found" }, 404);
-  }
-
-  const makeHeaders = () => {
-    const h = new Headers();
-    h.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-    h.set('Accept', '*/*');
-    h.set('Accept-Language', 'en-US,en;q=0.9');
-    let targetOrigin = '';
-    try { targetOrigin = new URL(streamUrl).origin; } catch(e) {}
-    if (referer) {
-      h.set('Referer', referer);
-      try { h.set('Origin', new URL(referer).origin); } catch(e) {}
-    } else if (targetOrigin) {
-      h.set('Referer', targetOrigin + '/');
-      h.set('Origin', targetOrigin);
-    }
-    return h;
-  };
-
-  const corsHeaders = { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
-
+app.get('/api/subtitles', async c => {
   try {
-    // Step 1: Fetch the master.m3u8 (may return encrypted path instead of standard M3U8)
-    let currentUrl = streamUrl;
-    let bodyText = '';
-    const MAX_FOLLOWS = 5;
-
-    for (let i = 0; i < MAX_FOLLOWS; i++) {
-      const resp = await fetch(currentUrl, { headers: makeHeaders() });
-      if (!resp.ok) {
-        return new Response(await resp.text(), {
-          status: resp.status,
-          headers: { 'Content-Type': 'text/plain', ...corsHeaders }
-        });
-      }
-
-      bodyText = await resp.text();
-
-      // If it's a valid M3U8 (has #EXTM3U), we're done following the chain
-      if (bodyText.trim().startsWith('#EXTM3U')) {
-        // Rewrite URLs in the M3U8 to go through our proxy
-        const baseUrl = new URL(currentUrl);
-        const reqUrl = new URL(c.req.url);
-        const proxyBase = `${reqUrl.protocol}//${reqUrl.host}/api/proxy`;
-        const ref = encodeURIComponent(referer || '');
-
-        bodyText = bodyText.split('\n').map(line => {
-          let trimmed = line.trim();
-          if (!trimmed) return line;
-
-          if (trimmed.startsWith('#') && trimmed.includes('URI=')) {
-            return trimmed.replace(/URI="([^"]+)"/, (match, p1) => {
-              try {
-                const absUrl = new URL(p1, baseUrl).toString();
-                return `URI="${proxyBase}?url=${encodeURIComponent(absUrl)}&referer=${ref}"`;
-              } catch (e) { return match; }
-            });
-          }
-
-          if (!trimmed.startsWith('#')) {
-            try {
-              const absUrl = new URL(trimmed, baseUrl).toString();
-              return `${proxyBase}?url=${encodeURIComponent(absUrl)}&referer=${ref}`;
-            } catch (e) { return trimmed; }
-          }
-          return trimmed;
-        }).join('\n');
-
-        return new Response(bodyText, {
-          status: 200,
-          headers: { 'Content-Type': 'application/vnd.apple.mpegurl', ...corsHeaders }
-        });
-      }
-
-      // Not a standard M3U8 — treat body as a relative path and follow it
-      const nextPath = bodyText.trim().split('\n')[0].trim();
-      if (!nextPath) break;
-
-      try {
-        currentUrl = new URL(nextPath, new URL(currentUrl)).toString();
-      } catch {
-        break;
-      }
-    }
-
-    // If we exhausted follows without finding valid M3U8, return what we have
-    return new Response(bodyText, {
-      status: 200,
-      headers: { 'Content-Type': 'application/vnd.apple.mpegurl', ...corsHeaders }
-    });
-  } catch (e) {
-    return c.json({ error: e.message }, 500);
-  }
+    const response = await fetchMedia(c.req.query('url'), { headers: { Accept: 'text/*', 'User-Agent': 'Mozilla/5.0' } }, c.env);
+    if (!response.ok) { await response.body?.cancel(); return json(c, { error: 'Subtitles are unavailable' }, 502); }
+    return new Response(toWebVTT(await readPlaylist(response)), { headers: { 'Content-Type': 'text/vtt; charset=utf-8', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=300', 'X-Content-Type-Options': 'nosniff' } });
+  } catch { return json(c, { error: 'Could not load subtitles' }, 502); }
 });
 
 app.get('/api/proxy', async (c) => {
-  const url = c.req.query('url');
-  const referer = c.req.query('referer');
-  if (!url) return c.json({ error: 'URL required' }, 400);
-
-  const headers = new Headers();
-  headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-  headers.set('Accept', '*/*');
-  headers.set('Accept-Language', 'en-US,en;q=0.9');
-  headers.set('Sec-Fetch-Dest', 'empty');
-  headers.set('Sec-Fetch-Mode', 'cors');
-  headers.set('Sec-Fetch-Site', 'cross-site');
-
-  let targetOrigin = '';
   try {
-    targetOrigin = new URL(url).origin;
-  } catch (e) {}
-
-  if (referer) {
-    headers.set('Referer', referer);
-    try { headers.set('Origin', new URL(referer).origin); } catch(e) {}
-  } else if (targetOrigin) {
-    headers.set('Referer', targetOrigin + '/');
-    headers.set('Origin', targetOrigin);
-  }
-
-  try {
-    const response = await fetch(url, { headers });
-    const responseHeaders = new Headers(response.headers);
-    responseHeaders.set('Access-Control-Allow-Origin', '*');
-    // Remove strict CORS headers from target if they exist
-    responseHeaders.delete('Access-Control-Allow-Credentials');
-    
-    const contentType = responseHeaders.get('content-type') || '';
-    if (contentType.includes('mpegurl') || contentType.includes('mpegURL') || url.includes('.m3u8')) {
-      let bodyText = await response.text();
-      const baseUrl = new URL(url);
-      const reqUrl = new URL(c.req.url);
-      const proxyBase = `${reqUrl.protocol}//${reqUrl.host}/api/proxy`;
-
-      bodyText = bodyText.split('\n').map(line => {
-        let trimmed = line.trim();
-        if (!trimmed) return line;
-
-        // Handle tags with URIs, e.g. #EXT-X-KEY:METHOD=AES-128,URI="key.bin"
-        if (trimmed.startsWith('#') && trimmed.includes('URI=')) {
-          return trimmed.replace(/URI="([^"]+)"/, (match, p1) => {
-            try {
-              const absUrl = new URL(p1, baseUrl).toString();
-              const proxyUrl = `${proxyBase}?url=${encodeURIComponent(absUrl)}&referer=${encodeURIComponent(referer || '')}`;
-              return `URI="${proxyUrl}"`;
-            } catch (e) {
-              return match;
-            }
-          });
-        }
-
-        // Handle playlist/segment URIs
-        if (!trimmed.startsWith('#')) {
-          try {
-            const absUrl = new URL(trimmed, baseUrl).toString();
-            const proxyUrl = `${proxyBase}?url=${encodeURIComponent(absUrl)}&referer=${encodeURIComponent(referer || '')}`;
-            return proxyUrl;
-          } catch (e) {
-            return trimmed;
-          }
-        }
-
-        return trimmed;
-      }).join('\n');
-
-      return new Response(bodyText, {
-        status: response.status,
-        headers: responseHeaders
-      });
-    }
-
-    return new Response(response.body, {
-      status: response.status,
-      headers: responseHeaders
-    });
+    return await mediaProxy(c.req.raw, c.env);
   } catch (e) {
-    return c.json({ error: e.message }, 500);
+    return c.json({ error: e.message }, e instanceof TypeError || /allowed|blocked|Private/.test(e.message) ? 400 : 502);
   }
+});
+
+app.get('/api/telegram/:id/:audio/:ep', async c => {
+  const { id, audio, ep } = c.req.param();
+  if (!/^\d+$/.test(id) || !['sub', 'dub'].includes(audio) || !/^\d+$/.test(ep)) return c.json({ error: 'Invalid episode parameters' }, 400);
+  try {
+    let registry;
+    if (c.env.TELEGRAM_PLAYLISTS?.get) registry = { [`${id}:${audio}:${ep}`]: await c.env.TELEGRAM_PLAYLISTS.get(`${id}:${audio}:${ep}`, 'json') };
+    else if (globalThis.process?.versions?.node && typeof WebSocketPair === 'undefined' && typeof EdgeRuntime === 'undefined') {
+      const { readFile } = await import('node:fs/promises');
+      registry = JSON.parse(await readFile(new URL('./telegram-streams.json', import.meta.url), 'utf8'));
+    }
+    const entry = registry?.[`${id}:${audio}:${ep}`];
+    if (!entry?.url) return c.json({ error: 'No Telegram upload is registered for this episode' }, 404);
+    c.header('Cache-Control', 'no-store');
+    return c.json({ [`ep_${ep}`]: { streams: [{ type: 'telegram', url: entry.url }], subtitles: [] } });
+  } catch { return c.json({ error: 'No Telegram upload is registered for this episode' }, 404); }
+});
+
+app.get('/api/telegram-playlist/:id/:audio/:ep', async c => {
+  try {
+    if (!globalThis.process?.versions?.node || typeof WebSocketPair !== 'undefined' || typeof EdgeRuntime !== 'undefined') return c.json({ error: 'Use the Telegram Worker PLAYLISTS binding on edge deployments' }, 503);
+    const { readFile } = await import('node:fs/promises');
+    const registry = JSON.parse(await readFile(new URL('./telegram-streams.json', import.meta.url), 'utf8'));
+    const entry = registry[`${c.req.param('id')}:${c.req.param('audio')}:${c.req.param('ep')}`];
+    if (!entry?.playlist) return c.notFound();
+    return new Response(entry.playlist, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=300' } });
+  } catch { return c.json({ error: 'Playlist not found' }, 404); }
 });
 
 app.get('/', (c) => {

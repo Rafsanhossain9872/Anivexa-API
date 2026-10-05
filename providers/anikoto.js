@@ -1,4 +1,5 @@
 import { getMedia } from '../core/anilist.js';
+import { providerFetch as fetch } from '../core/network.js';
 
 const ANIKOTO = "https://anikototv.to";
 const MAPPER = "https://mapper.nekostream.site/api/mal";
@@ -517,7 +518,7 @@ export default {
       }
       return jsonResponse({ error: "Not found" }, 404);
     } catch (err) {
-      return jsonResponse({ error: err.message, stack: err.stack }, 500);
+      return jsonResponse({ error: 'Provider request failed' }, 502);
     }
   }
 };

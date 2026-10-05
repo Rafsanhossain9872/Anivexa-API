@@ -1,11 +1,12 @@
 const __name = (fn, _) => fn;
+import { providerFetch as fetch } from '../core/network.js';
 
 var UA4 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0";
 var API = "https://api.allanime.day";
 var REFERER = "https://allmanga.to";
 var ANIZIP = "https://api.ani.zip/mappings";
 var PASSPHRASE = "Xot36i3lK3:v1";
-var TMDB_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJlYjdkMWM0ZTgwMGUzM2FiMmE3Y2I3NDA5YmM4NjQ2YSIsIm5iZiI6MTc3OTUzMDcxOS40MzIsInN1YiI6IjZhMTE3YmRmYTlhNjNlYmFiOWUzYjc4YyIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.Z9pa96oJEyicf6wAoaKGKJd9ldapeiOdktoJd4xcgLo"; //i honestly forgot why i added it here, anyway it was created using tempmail so idc if its leaked or whatever
+var TMDB_TOKEN = globalThis.process?.env?.TMDB_TOKEN || '';
 var HASHES = {
   episode: "d405d0edd690624b66baba3068e0edc3ac90f1597d898a1ec8db4e5c43c00fec"
 };
@@ -716,7 +717,7 @@ var allmanga_default = {
         return json2(data);
       }
     } catch (err) {
-      return json2({ error: err.message, "Raw-ERROR": err.rawBody ?? null, stack: err.stack }, 500);
+      return json2({ error: 'Provider request failed' }, 502);
     }
   }
 };

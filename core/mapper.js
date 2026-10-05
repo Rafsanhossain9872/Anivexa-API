@@ -1,4 +1,5 @@
 const __name = (fn, _) => fn;
+import { providerFetch as fetch } from './network.js';
 import { getMedia } from './anilist.js';
 
 var ARM2 = "https://arm.haglund.dev/api/v2/ids";

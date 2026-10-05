@@ -191,7 +191,8 @@ export function episodeMeta(n, ctx) {
 
 export function selectSeries(candidates, scrapeSeries, expected, status, offset, options = {}) {
   return Promise.all(candidates.map(async (candidate) => {
-    const episodes = await scrapeSeries(candidate.slug);
+    const scraped = await Promise.resolve().then(() => scrapeSeries(candidate.slug)).catch(() => []);
+    const episodes = Array.isArray(scraped) ? scraped : [];
     const max = Math.max(0, ...episodes.map((e) => e.number));
     const localHits = expected ? episodes.filter((e) => e.number >= 1 && e.number <= expected).length : episodes.length;
     const offsetHits = expected && offset
@@ -221,7 +222,7 @@ export function json(data, status = 200) {
     headers: {
       "Content-Type": "application/json",
       "Access-Control-Allow-Origin": "*",
-      "Cache-Control": "public, max-age=300",
+      "Cache-Control": status >= 400 ? 'no-store' : 'public, max-age=300',
     },
   });
 }

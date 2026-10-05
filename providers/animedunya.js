@@ -1,6 +1,7 @@
 
 import { json, episodeMeta } from "../core/new-provider-utils.js";
 import { getMedia } from "../core/anilist.js";
+import { providerFetch as fetch } from '../core/network.js';
 import { get as cacheGet, set as cacheSet, isFresh, SHOW_IDENTITY_TTL } from "../core/smartcache.js";
 
 const BASE = "https://anime-dunya.com";
@@ -192,7 +193,7 @@ export default {
       if (m) return await handleWatch(m[1], m[2], m[3]);
       return json({ error: "Not found" }, 404);
     } catch (err) {
-      return json({ error: err.message, stack: err.stack }, 500);
+      return json({ error: 'Provider request failed' }, 502);
     }
   }
 };

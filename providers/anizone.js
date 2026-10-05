@@ -1,4 +1,5 @@
 import { getMedia } from "../core/anilist.js";
+import { providerFetch as fetch } from '../core/network.js';
 import {
   buildTitles,
   decodeEntities,
@@ -257,6 +258,7 @@ export async function getEpisodes(anilistId, ctx = {}) {
 }
 
 async function handleWatch(anilistId, audio, epNum, ctx = {}) {
+  if (audio === 'dub') return json({ error: 'AniZone supports sub only' }, 404);
   const series = await resolveSeries(anilistId, ctx);
   const providerEp = series.mode === "offset" ? Number(epNum) + series.offset : Number(epNum);
   const watch = await scrapeWatch(series.slug, providerEp);
@@ -290,7 +292,7 @@ export default {
       if (m) return await handleWatch(m[1], m[2], m[3]);
       return json({ error: "Not found" }, 404);
     } catch (err) {
-      return json({ error: err.message, "Raw-ERROR": err.rawBody ?? null, stack: err.stack }, 500);
+      return json({ error: 'Provider request failed' }, 502);
     }
   },
 };

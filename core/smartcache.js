@@ -1,10 +1,18 @@
-export const _CACHE_ENABLED = false; //change it to true and setup your upstash so you can cache your data
+import { providerFetch as fetch } from './network.js';
 
-const IS_LOCAL_NODE = false;
+export let _CACHE_ENABLED = globalThis.process?.env?.CACHE_ENABLED !== 'false';
+let UPSTASH_REDIS_REST_URL = '';
+let UPSTASH_REDIS_REST_TOKEN = '';
+let REDIS_ENABLED = false;
 
-const UPSTASH_REDIS_REST_URL = "YOUR_UPSTASH_REDIS_REST_URL"; //get it from upstash.com 
-const UPSTASH_REDIS_REST_TOKEN = "YOUR_UPSTASH_REDIS_REST_TOKEN";
-const REDIS_ENABLED = Boolean(UPSTASH_REDIS_REST_URL && UPSTASH_REDIS_REST_TOKEN);
+export function configureCache(env = {}) {
+  const settings = { ...globalThis.process?.env, ...env };
+  _CACHE_ENABLED = settings.CACHE_ENABLED !== 'false';
+  UPSTASH_REDIS_REST_URL = settings.UPSTASH_REDIS_REST_URL || '';
+  UPSTASH_REDIS_REST_TOKEN = settings.UPSTASH_REDIS_REST_TOKEN || '';
+  REDIS_ENABLED = /^https:\/\//.test(UPSTASH_REDIS_REST_URL) && Boolean(UPSTASH_REDIS_REST_TOKEN);
+}
+configureCache();
 
 function encodeEntry(entry) {
   return JSON.stringify(entry, (_, value) => value === Infinity ? "__Infinity__" : value);
@@ -23,6 +31,7 @@ async function redisCommand(command) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(command),
+    signal: AbortSignal.timeout(5000),
   }).catch(() => null);
   if (!res?.ok) return null;
   const json = await res.json().catch(() => null);
@@ -61,7 +70,8 @@ function evict() {
 export function get(key) {
   if (!_CACHE_ENABLED) return null;
   let e = mem.get(key);
-  if (e) return e;
+  if (e && e.expiresAt > Date.now()) return e;
+  if (e) { mem.delete(key); diskDel(key); return null; }
 
   e = diskRead(key);
   if (!e) return null;

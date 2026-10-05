@@ -1,4 +1,5 @@
 import { forgetMedia, getMedia } from "./anilist.js";
+import { providerFetch as fetch } from './network.js';
 import { mapAnimeIds } from "./mapper.js";
 import { buildEpisodesWithCache, buildFilteredEpisodesWithCache } from "./episode-strategy.js";
 import { get, set, getAsync, setAsync, needsRefresh, delAsync, delByPrefixAsync } from "./smartcache.js";

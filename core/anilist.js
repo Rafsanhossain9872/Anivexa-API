@@ -1,4 +1,9 @@
 const __name = (fn, _) => fn;
+import { providerFetch as fetch } from './network.js';
+function cacheMedia(id, media) {
+  resolved.set(id, { data: media, expiresAt: Date.now() + (media.status === 'FINISHED' ? 86400000 : 300000) });
+  if (resolved.size > 500) resolved.delete(resolved.keys().next().value);
+}
 
 var resolved = new Map();
 var inflight = new Map();
@@ -21,7 +26,7 @@ const AL_STATUS_MAP = {
 };
 
 async function fetchFromAniList(id) {
-  const fullQuery = `query($id:Int){Media(id:$id,type:ANIME){id title{english romaji native} status format episodes seasonYear startDate{year} synonyms nextAiringEpisode{episode airingAt timeUntilAiring}}}`;
+  const fullQuery = `query($id:Int){Media(id:$id,type:ANIME){id idMal title{english romaji native} status format episodes seasonYear startDate{year} synonyms nextAiringEpisode{episode airingAt timeUntilAiring}}}`;
   const res = await fetch("https://graphql.anilist.co", {
     method: "POST",
     headers: { "Content-Type": "application/json", "Accept": "application/json", "User-Agent": UA },
@@ -34,9 +39,16 @@ async function fetchFromAniList(id) {
 
 async function getMedia(anilistId) {
   const id = Number(anilistId);
-  if (resolved.has(id)) return resolved.get(id);
+    if (resolved.has(id) && resolved.get(id).expiresAt > Date.now()) return resolved.get(id).data;
+    resolved.delete(id);
   if (inflight.has(id)) return inflight.get(id);
   const promise = (async () => {
+    const primary = await fetchFromAniList(id);
+    if (primary) {
+      const media = { ...primary, id, status: AL_STATUS_MAP[primary.status] || 'RELEASING', synonyms: primary.synonyms || [] };
+      cacheMedia(id, media);
+      return media;
+    }
     const arm = await fetch(`${ARM}?source=anilist&id=${id}`, {
       headers: { "User-Agent": UA, "Accept": "application/json" }
     }).then((r) => {
@@ -65,7 +77,7 @@ async function getMedia(anilistId) {
         nextAiringEpisode: al.nextAiringEpisode ?? null,
         synonyms: Array.isArray(al.synonyms) ? al.synonyms : [],
       };
-      resolved.set(id, media);
+      cacheMedia(id, media);
       inflight.delete(id);
       return media;
     }
@@ -73,7 +85,8 @@ async function getMedia(anilistId) {
     const al = await fetchFromAniList(id).catch(() => null);
     let jikan = null;
     for (let attempt = 0; attempt <= 4; attempt++) {
-      const r = await fetch(`${JIKAN}/anime/${malId}`, { headers: { "User-Agent": UA, Accept: "application/json" } });
+      const r = await fetch(`${JIKAN}/anime/${malId}`, { headers: { "User-Agent": UA, Accept: "application/json" } }).catch(() => null);
+      if (!r) { if (al) break; throw new Error('Jikan is unavailable'); }
       if (r.status === 429) {
         const wait = (parseInt(r.headers.get("Retry-After") ?? "1") || 1) * 1e3 + attempt * 500;
         if (attempt < 4) {
@@ -109,7 +122,7 @@ async function getMedia(anilistId) {
         nextAiringEpisode: al.nextAiringEpisode ?? null,
         synonyms: Array.isArray(al.synonyms) ? al.synonyms : [],
       };
-      resolved.set(id, media);
+      cacheMedia(id, media);
       inflight.delete(id);
       return media;
     }
@@ -133,13 +146,10 @@ async function getMedia(anilistId) {
         ...(Array.isArray(al?.synonyms) ? al.synonyms : []),
       ],
     };
-    resolved.set(id, media);
+    cacheMedia(id, media);
     inflight.delete(id);
     return media;
-  })().catch((e) => {
-    inflight.delete(id);
-    throw e;
-  });
+  })().finally(() => inflight.delete(id));
   inflight.set(id, promise);
   return promise;
 }

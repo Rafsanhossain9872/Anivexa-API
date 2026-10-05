@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { Buffer } from "node:buffer";
 import { getMedia } from "../core/anilist.js";
+import { providerFetch as fetch } from '../core/network.js';
 import {
   buildTitles,
   decodeEntities,
@@ -360,7 +361,7 @@ export default {
       if (m) return await handleWatch(m[1], m[2], m[3]);
       return json({ error: "Not found" }, 404);
     } catch (err) {
-      return json({ error: err.message, "Raw-ERROR": err.rawBody ?? null, stack: err.stack }, 500);
+      return json({ error: 'Provider request failed' }, 502);
     }
   },
 };

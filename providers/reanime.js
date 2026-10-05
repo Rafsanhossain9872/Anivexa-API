@@ -1,5 +1,7 @@
 const __name = (fn, _) => fn;
 import { getMedia } from '../core/anilist.js';
+import { providerFetch as fetch } from '../core/network.js';
+import { rewriteM3U8, fetchMedia, validateMediaURL } from '../core/media-proxy.js';
 import { buildTitles } from '../core/new-provider-utils.js';
 import { get as cacheGet, set as cacheSet, isFresh as cacheIsFresh, SHOW_IDENTITY_TTL } from '../core/smartcache.js';
 
@@ -622,7 +624,7 @@ async function handleWatch3(anilistId, audio, epNum, origin) {
   try {
     resolved = await resolveStream3(anilistId, audio, ep);
   } catch (e) {
-    return json3({ error: e.message, "Raw-ERROR": e.rawBody ?? null, stack: e.stack }, e.status ?? 500);
+    return json3({ error: 'Provider request failed' }, e.status ?? 502);
   }
   const { title: title2, slug, watchData, stream, server, servers } = resolved;
   const redirectUrl = `${origin}/stream/reanime/${anilistId}/${audio}/${ep}`;
@@ -660,7 +662,7 @@ async function handleStream3(anilistId, audio, epNum) {
   try {
     resolved = await resolveStream3(anilistId, audio, ep);
   } catch (e) {
-    return json3({ error: e.message, "Raw-ERROR": e.rawBody ?? null, stack: e.stack }, e.status ?? 500);
+    return json3({ error: 'Provider request failed' }, e.status ?? 502);
   }
   return new Response(null, {
     status: 302,
@@ -678,11 +680,11 @@ async function handleProxy3(url) {
   if (!target) return json3({ error: "Missing required ?url= param" }, 400);
   let targetUrl;
   try {
-    targetUrl = new URL(target);
+    targetUrl = validateMediaURL(target);
   } catch {
     return json3({ error: "Invalid url param" }, 400);
   }
-  const upstream = await fetch(target, {
+   const upstream = await fetchMedia(target, {
     headers: {
       "User-Agent": UA5,
       "Accept": "*/*",
@@ -701,7 +703,7 @@ async function handleProxy3(url) {
   }
   if (isM3U8) {
     const text = await upstream.text();
-    const rewritten = rewriteM3U8(text, target, url.origin);
+    const rewritten = rewriteM3U8(text, upstream.url || target, `${url.origin}/api/proxy`, referer);
     return new Response(rewritten, { status: 200, headers: { "Content-Type": "application/vnd.apple.mpegurl", ...corsHeaders } });
   }
   return new Response(upstream.body, { status: upstream.status, headers: { "Content-Type": ct || "application/octet-stream", ...corsHeaders } });
@@ -726,7 +728,7 @@ var reanime_default = {
       if (m) return await handleStream3(m[1], m[2], m[3]);
       return json3({ error: "Not found", routes: ["GET /episodes/:anilistId", "GET /watch/:anilistId/sub|dub/:ep", "GET /stream/:anilistId/sub|dub/:ep", "GET /proxy?url=&referer="] }, 404);
     } catch (err) {
-      return json3({ error: err.message, "Raw-ERROR": err.rawBody ?? null, ...err.debug ? { debug: err.debug } : {}, stack: err.stack }, 500);
+      return json3({ error: 'Provider request failed' }, 502);
     }
   }
 };

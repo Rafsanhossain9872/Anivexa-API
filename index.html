@@ -445,7 +445,7 @@
     <script>
         document.addEventListener("DOMContentLoaded", () => {
             const video = document.getElementById('videoElement');
-            const source = 'https://tenzora-edge.hossainrafsan046.workers.dev/stream/BQACAgUAAxkBAAMCan2XJ8K1ze3wMK9JZMLljwJjSLsAAhwlAAJMbPBXFjvaeDBHp9w9BA';
+            const source = 'https://tenzora-edge.hossainrafsan046.workers.dev/stream/BQACAgUAAyEFAAMBAAH3chkAAw5qfe85zCbhGjlTRGReVCHHEjEybAACOyYAAi968Vehw4bhrMI-VD0E';
             
             // UI Elements
             const uiLayer = document.getElementById('uiLayer');
@@ -522,7 +522,10 @@
 
             // --- Player Controls Logic ---
 
-            function togglePlay() {
+            function togglePlay(e) {
+                if (e) {
+                    e.stopPropagation();
+                }
                 if (video.paused) {
                     const playPromise = video.play();
                     if (playPromise !== undefined) {

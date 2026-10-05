@@ -19,7 +19,7 @@ export default {
       });
     }
 
-    if (!targetUrl.hostname.endsWith("anidb.app")) {
+    if (targetUrl.protocol !== 'https:' || targetUrl.username || targetUrl.password || !(targetUrl.hostname === 'anidb.app' || targetUrl.hostname.endsWith('.anidb.app'))) {
       return new Response(JSON.stringify({ error: "Only anidb.app requests allowed" }), {
         status: 403,
         headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
@@ -27,6 +27,8 @@ export default {
     }
 
     const res = await fetch(target, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(15000),
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json,*/*;q=0.8",
@@ -34,7 +36,7 @@ export default {
         "Referer": ref,
         "X-Requested-With": request.headers.get("X-Requested-With") ?? "",
       },
-    }).catch((e) => null);
+    }).catch(() => null);
 
     if (!res) {
       return new Response(JSON.stringify({ error: "Fetch failed" }), {
@@ -43,11 +45,11 @@ export default {
       });
     }
 
-    const body = await res.arrayBuffer();
+    if (res.status >= 300 && res.status < 400) return Response.json({ error: 'Upstream redirects are not supported' }, { status: 502 });
     const headers = new Headers();
     headers.set("Access-Control-Allow-Origin", "*");
     headers.set("Content-Type", res.headers.get("Content-Type") ?? "text/plain");
 
-    return new Response(body, { status: res.status, headers });
+    return new Response(res.body, { status: res.status, headers });
   },
 };

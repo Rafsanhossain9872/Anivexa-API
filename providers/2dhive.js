@@ -1,4 +1,5 @@
 import { getMedia } from "../core/anilist.js";
+import { providerFetch as fetch } from '../core/network.js';
 import { episodeMeta, expectedCount, json } from "../core/new-provider-utils.js";
 
 async function getMalId(anilistId, ctx) {
@@ -264,7 +265,7 @@ export default {
 
       return json({ error: "Not found" }, 404);
     } catch (err) {
-      return json({ error: err.message, stack: err.stack }, 500);
+      return json({ error: 'Provider request failed' }, 502);
     }
   },
 };

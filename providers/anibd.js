@@ -1,4 +1,5 @@
 import { episodeMeta, expectedCount, json } from "../core/new-provider-utils.js";
+import { providerFetch as fetch } from '../core/network.js';
 
 const BASE = "https://epeng.animeapps.top";
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -169,7 +170,7 @@ export default {
       if (m) return await handleWatch(m[1], m[2], m[3]);
       return json({ error: "Not found" }, 404);
     } catch (err) {
-      return json({ error: err.message, stack: err.stack }, 500);
+      return json({ error: 'Provider request failed' }, 502);
     }
   },
 };

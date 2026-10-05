@@ -1,8 +1,10 @@
 import http from "node:http";
+import 'dotenv/config';
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import worker from "./index.js";
+import { toWebRequest, sendWebResponse } from './core/node-adapter.js';
 
 const PORT  = process.env.PORT ?? 4000;
 const BASE  = process.env.BASE_PATH ?? "";
@@ -29,23 +31,6 @@ function serveStatic(res, entry) {
   }
 }
 
-async function nodeToRequest(req) {
-  const host     = req.headers["host"] ?? `localhost:${PORT}`;
-  const stripped = BASE && req.url.startsWith(BASE) ? req.url.slice(BASE.length) || "/" : req.url;
-  const url      = `http://${host}${stripped}`;
-
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  const body = chunks.length ? Buffer.concat(chunks) : null;
-
-  return new Request(url, {
-    method:  req.method,
-    headers: req.headers,
-    body:    body?.length ? body : undefined,
-    duplex:  "half",
-  });
-}
-
 const server = http.createServer(async (req, res) => {
   console.log(`→ ${req.method} ${req.url}`);
 
@@ -57,22 +42,17 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
-    const request  = await nodeToRequest(req);
-    const response = await worker.fetch(request, {});
-
-    res.statusCode = response.status;
-    for (const [k, v] of response.headers) res.setHeader(k, v);
-
-    const buf = await response.arrayBuffer();
-    res.end(Buffer.from(buf));
+    const request = await toWebRequest(req, BASE);
+    await sendWebResponse(res, await worker.fetch(request, process.env));
   } catch (err) {
     console.error("Unhandled error:", err);
-    res.statusCode = 500;
+    if (res.headersSent) return res.destroy(err);
+    res.statusCode = err.status || 500;
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ error: err.message }));
+    res.end(JSON.stringify({ error: err.status === 413 ? err.message : 'Request failed' }));
   }
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, process.env.HOST || '0.0.0.0', () => {
   console.log(`Anivexa dev server → http://localhost:${PORT}`);
 });

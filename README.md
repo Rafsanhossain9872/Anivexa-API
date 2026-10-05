@@ -71,12 +71,19 @@ GET /stream/reanime/:id/sub|dub/:ep
 ## Self-hosted
 
 ```bash
-git clone https://github.com/walterwhite-69/Anivexa-API
+git clone https://github.com/Rafsanhossain9872/Anivexa-API
 cd Anivexa-API
-node server.js
+npm ci
+npm start
 ```
 
-Runs on Node.js. No build step needed.
+Runs on Node.js 22.12+ (Node 24 recommended). No build step needed. The default port is 4000; set `PORT=4001` when running beside Anixo's comments service.
+
+Environment settings are documented in `.env.example`. Export them through your runtime, or start with `node --env-file-if-exists=.env server.js`. Store Telegram/TMDB/Redis credentials in environment variables or Worker secrets. Previously exposed credentials must be rotated; removing current literals does not remove historical commits.
+
+Node media proxies validate public DNS addresses and every redirect. Worker media proxying requires `PROXY_ALLOWED_HOSTS` configured for the actual CDNs. Third-party streams remain dependent on provider availability; native HLS playback has not been verified against every provider.
+
+The companion [Anixo local preview guide](https://github.com/Rafsanhossain9872/Anixo/blob/main/docs/LOCAL_PREVIEW.md) covers the isolated eight-service setup and regression/browser/socket checks. Telegram uploads require owner-configured credentials and are not part of those tests.
 
 ---
 
