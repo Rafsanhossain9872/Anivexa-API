@@ -13,7 +13,8 @@ import anizoneHandler              from "./providers/anizone.js";
 import animeggHandler              from './providers/animegg.js';
 import { mediaProxy, fetchMedia, readPlaylist, resolveHLS } from './core/media-proxy.js';
 import { toWebVTT } from './core/subtitles.js';
-import { withDeadline, withRequestBudget } from './core/network.js';
+import { withDeadline, withRequestBudget, providerFetch } from './core/network.js';
+import { firstSuccessfulProvider } from './core/provider-race.js';
 import anibdHandler from './providers/anibd.js';
 import anidbappHandler from './providers/anidbapp.js';
 import kaaHandler from './providers/kickassanime.js';
@@ -26,7 +27,7 @@ const app = new Hono();
 app.use('*', async (c, next) => {
   configureCache(c.env);
   const edge = typeof WebSocketPair !== 'undefined';
-  await withRequestBudget(next, edge ? 40 : 150, edge ? c.executionCtx.waitUntil.bind(c.executionCtx) : undefined);
+  await withRequestBudget(next, edge ? 40 : 150, edge ? c.executionCtx.waitUntil.bind(c.executionCtx) : undefined, c.req.raw.signal);
 });
 
 app.use('*', cors({
@@ -81,6 +82,39 @@ async function cachedWatch(c, cacheKey, handlerFn) {
     watchInflight.delete(cacheKey); 
   }
 }
+
+app.get('/metadata/:id{[0-9]+}', async c => {
+  const id = Number(c.req.param('id'));
+  const source = c.req.query('source') || 'anilist';
+  if (!Number.isSafeInteger(id) || id <= 0 || !['anilist', 'mal'].includes(source)) return json(c, { error: 'Invalid metadata parameters' }, 400);
+  try {
+    const data = await withDeadline(async () => {
+      let anilistId = id;
+      if (source === 'mal') {
+        const response = await providerFetch(`https://api.ani.zip/mappings?mal_id=${id}`);
+        if (!response.ok) throw new Error('ID mapping unavailable');
+        const mapping = await response.json();
+        if (Number(mapping.mappings?.mal_id) !== id) throw new Error('ID mapping mismatch');
+        anilistId = Number(mapping.mappings?.anilist_id);
+        if (!Number.isSafeInteger(anilistId) || anilistId <= 0) throw new Error('AniList mapping unavailable');
+      }
+      const media = await getMedia(anilistId);
+      if (source === 'mal' && Number(media.idMal) !== id) throw new Error('ID mapping mismatch');
+      return {
+        ...media, anilistId, isMAL: false, type: 'ANIME',
+        genres: media.genres || [], tags: media.tags || [],
+        coverImage: media.coverImage || { extraLarge: null, large: null, medium: null },
+        characters: media.characters || { edges: [] },
+        studios: media.studios || { nodes: [] },
+        recommendations: media.recommendations || { nodes: [] },
+        relations: media.relations || { edges: [] },
+      };
+    }, 6000);
+    return json(c, data);
+  } catch {
+    return json(c, { error: 'Anime metadata is unavailable' }, 502);
+  }
+});
 
 app.get('/map/:anilistId', async (c) => {
   const anilistId = c.req.param('anilistId');
@@ -142,7 +176,8 @@ app.get('/watch/allmanga/:id/:audio/:ep{allmanga-[0-9]+}', async (c) => {
 
 app.get('/watch/reanime/:id/:audio/:ep{reanime-[0-9]+}', async (c) => {
   const { id, audio, ep } = c.req.param();
-  return cachedWatch(c, `watch:reanime:${id}:${audio}:${ep}`, () => reanimeHandler.fetch(rewriteRequest(c.req.raw, `/watch/${id}/${audio}/${ep.replace('reanime-', '')}`)));
+  const variant = c.req.query('mode') === 'embed' ? ':embed' : '';
+  return cachedWatch(c, `watch:reanime:${id}:${audio}:${ep}${variant}`, () => reanimeHandler.fetch(rewriteRequest(c.req.raw, `/watch/${id}/${audio}/${ep.replace('reanime-', '')}`)));
 });
 
 app.get('/stream/reanime/:id/:audio/:ep', async (c) => {
@@ -152,7 +187,8 @@ app.get('/stream/reanime/:id/:audio/:ep', async (c) => {
 
 app.get('/watch/anikoto/:id/:audio/:ep{anikoto-[0-9]+}', async (c) => {
   const { id, audio, ep } = c.req.param();
-  return cachedWatch(c, `watch:anikoto:${id}:${audio}:${ep}`, () => anikotoHandler.fetch(c.req.raw));
+  const variant = c.req.query('fast') === 'true' ? ':fast' : '';
+  return cachedWatch(c, `watch:anikoto:${id}:${audio}:${ep}${variant}`, () => anikotoHandler.fetch(c.req.raw));
 });
 
 app.get('/watch/animegg/:id/:audio/:ep{animegg-[0-9]+}', async (c) => {
@@ -192,7 +228,7 @@ app.get('/stream/2dhive/download/:id/:audio/:ep', async (c) => {
 for (const [name, handler] of [['anibd', anibdHandler], ['anidbapp', anidbappHandler], ['kaa', kaaHandler], ['animedunya', animedunyaHandler]]) {
   app.get(`/watch/${name}/:id/:audio/:ep{${name}-[0-9]+}`, async c => cachedWatch(c, `watch:${name}:${c.req.param('id')}:${c.req.param('audio')}:${c.req.param('ep')}`, () => withDeadline(() => handler.fetch(c.req.raw))));
 }
-// Sequential fallback across 7 providers; normalizes to frontend's expected format:
+// First usable result across 7 providers; normalizes to frontend's expected format:
 // { "ep_X": { streams: [...], subtitles: [...], intro: {}, outro: {} } }
 
 const LANG_CODES = {
@@ -435,47 +471,26 @@ function normalizeAnizone(rawRes) {
   return { streams, subtitles, intro: { start: 0, end: 0 }, outro: { start: 0, end: 0 } };
 }
 
-async function tryProvider(handler, path, origin) {
-  try {
-    const fakeUrl = new URL(path, origin);
-    const fakeReq = new Request(fakeUrl.toString(), { method: "GET", signal: AbortSignal.timeout(15000) });
-    const res = await withDeadline(() => handler.fetch(fakeReq));
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
+async function tryProvider(provider, origin, signal) {
+  const fakeReq = new Request(new URL(provider.path, origin), { method: 'GET', signal });
+  const res = await provider.handler.fetch(fakeReq);
+  if (!res.ok) { await res.body?.cancel(); return null; }
+  const data = await res.json();
+  return data?.error ? null : provider.normalize(data);
 }
 
-app.get('/api/watch/:anilistId/:lang/:ep', async (c) => {
-  const anilistId = c.req.param('anilistId');
-  const lang = c.req.param('lang');
-  const ep = c.req.param('ep');
-  const audio = lang === "dub" ? "dub" : "sub";
-  const episodeKey = `ep_${ep}`;
-
-  // Stream URL cache DISABLED: flixcloud tokens are IP-locked and time-limited.
-  // Serving a cached token causes 403 errors when the token expires or the
-  // Worker edge node IP rotates. Always fetch a fresh stream URL.
-  // const cacheKey = `apiwatch:${anilistId}:${audio}:${ep}`;
-  // const cached = await getAsync(cacheKey);
-  // if (cached && isFresh(cached)) {
-  //   c.header("Cache-Control", "public, max-age=300");
-  //   return c.json(cached.data);
-  // }
-
-  // Sequential fallback chain: reanime → anikoto → allmanga → anineko → 2dhive → animenosub → anizone
-  const providers = [
+function playbackProviders(anilistId, audio, ep, embedOnly = false) {
+  return [
     {
       name: "reanime",
       handler: reanimeHandler,
-      path: `/watch/${anilistId}/${audio}/${ep}`,
+      path: `/watch/${anilistId}/${audio}/${ep}${embedOnly ? '?mode=embed' : ''}`,
       normalize: normalizeReanime,
     },
     {
       name: "anikoto",
       handler: anikotoHandler,
-      path: `/watch/anikoto/${anilistId}/${audio}/anikoto-${ep}`,
+      path: `/watch/anikoto/${anilistId}/${audio}/anikoto-${ep}?fast=true`,
       normalize: normalizeAnikoto,
     },
     {
@@ -509,27 +524,28 @@ app.get('/api/watch/:anilistId/:lang/:ep', async (c) => {
       normalize: normalizeAnizone,
     },
   ];
+}
 
-  for (const provider of providers) {
-    try {
-      const rawData = await tryProvider(provider.handler, provider.path, new URL(c.req.url).origin);
-      if (!rawData || rawData.error) continue;
+app.get('/api/watch/:anilistId/:lang/:ep', async (c) => {
+  const { anilistId, lang, ep } = c.req.param();
+  const audio = lang === 'dub' ? 'dub' : 'sub';
+  const origin = new URL(c.req.url).origin;
+  const mode = c.req.query('mode');
+  const embedOnly = mode === 'embed';
+  // Always fetch fresh URLs: flixcloud tokens can be IP-locked and time-limited.
+  c.header('Cache-Control', 'no-store');
+  c.header('X-Playback-Mode', embedOnly ? 'embed' : 'native');
+  const result = await firstSuccessfulProvider(playbackProviders(anilistId, audio, ep, embedOnly), async (provider, signal) => {
+    const normalized = await tryProvider(provider, origin, signal);
+    if (!normalized?.streams.length) return null;
+    if (mode === 'hls' && !normalized.streams.some(stream => ['hls', 'mp4'].includes(stream.type))) return null;
+    for (const stream of normalized.streams) stream.url = new URL(stream.url, c.req.url).href;
+    return normalized;
+  }, { signal: c.req.raw.signal, concurrency: embedOnly ? 1 : 3 });
 
-      const normalized = provider.normalize(rawData);
-      if (!normalized || normalized.streams.length === 0) continue;
-      for (const stream of normalized.streams) stream.url = new URL(stream.url, c.req.url).href;
-
-      const result = { [episodeKey]: normalized };
-
-      // Cache disabled — see comment above
-      // await setAsync(cacheKey, result, WATCH_TTL).catch(() => {});
-
-      c.header("Cache-Control", "no-store");
-      c.header("X-Provider", provider.name);
-      return c.json(result);
-    } catch {
-      continue;
-    }
+  if (result) {
+    c.header('X-Provider', result.provider.name);
+    return c.json({ [`ep_${ep}`]: result.value });
   }
 
   return c.json({ error: "No streams found from any provider", anilistId, episode: ep, audio }, 404);
@@ -539,35 +555,33 @@ app.get('/api/watch/:anilistId/:lang/:ep', async (c) => {
 // Follows the flixcloud M3U8 chain: master.m3u8 returns an encrypted path,
 // which must be resolved to get the actual variant playlist with #EXTM3U tags.
 app.get('/api/hls/:anilistId/:lang/:ep', async (c) => {
-  const anilistId = c.req.param('anilistId');
-  const lang = c.req.param('lang');
-  const ep = c.req.param('ep');
-  const audio = lang === "dub" ? "dub" : "sub";
-
-  const providers = [
-    { name: "reanime", handler: reanimeHandler, path: `/watch/${anilistId}/${audio}/${ep}`, normalize: normalizeReanime },
-    { name: "anikoto", handler: anikotoHandler, path: `/watch/anikoto/${anilistId}/${audio}/anikoto-${ep}`, normalize: normalizeAnikoto },
-    { name: "allmanga", handler: mangaHandler, path: `/watch/allmanga/${anilistId}/${audio}/allmanga-${ep}`, normalize: normalizeAllmanga },
-    { name: "anineko", handler: aninekoHandler, path: `/watch/anineko/${anilistId}/${audio}/anineko-${ep}`, normalize: normalizeAnineko },
-    { name: "2dhive", handler: dhiveHandler, path: `/watch/2dhive/${anilistId}/${audio}/2dhive-${ep}`, normalize: normalize2dhive },
-    { name: "animenosub", handler: animenosubHandler, path: `/watch/animenosub/${anilistId}/${audio}/animenosub-${ep}`, normalize: normalizeAnimenosub },
-    { name: "anizone", handler: anizoneHandler, path: `/watch/anizone/${anilistId}/${audio}/anizone-${ep}`, normalize: normalizeAnizone },
-  ];
-
-  for (const provider of providers) {
-    try {
-      const rawData = await tryProvider(provider.handler, provider.path, new URL(c.req.url).origin);
-      if (!rawData || rawData.error) continue;
-      const normalized = provider.normalize(rawData);
-      if (!normalized || normalized.streams.length === 0) continue;
+  const { anilistId, lang, ep } = c.req.param();
+  const audio = lang === 'dub' ? 'dub' : 'sub';
+  const origin = new URL(c.req.url).origin;
+  const result = await firstSuccessfulProvider(playbackProviders(anilistId, audio, ep), async (provider, signal) => {
+    // If AniKoto's first source is inaccessible, retain its full source fallback.
+    const paths = provider.name === 'anikoto' ? [provider.path, provider.path.split('?')[0]] : [provider.path];
+    const attempted = new Set();
+    for (const path of paths) {
+      signal.throwIfAborted();
+      const normalized = await tryProvider({ ...provider, path }, origin, signal);
+      if (!normalized?.streams.length) continue;
       for (const stream of normalized.streams.filter(s => s.type === 'hls' || s.url?.includes('.m3u8'))) {
+        signal.throwIfAborted();
+        const url = new URL(stream.url, c.req.url).href;
+        if (attempted.has(url)) continue;
+        attempted.add(url);
         try {
-          const response = await resolveHLS(new URL(stream.url, c.req.url).href, `${new URL(c.req.url).origin}/api/proxy`, stream.referer || stream.headers?.Referer || '', c.env);
-          response.headers.set('X-Provider', provider.name);
-          return response;
-        } catch { /* Try the next stream/provider after inaccessible or invalid playlists. */ }
+          return await resolveHLS(url, `${origin}/api/proxy`, stream.referer || stream.headers?.Referer || '', c.env);
+        } catch { /* Try the next stream after inaccessible or invalid playlists. */ }
       }
-    } catch { continue; }
+    }
+    return null;
+  }, { signal: c.req.raw.signal });
+
+  if (result) {
+    result.value.headers.set('X-Provider', result.provider.name);
+    return result.value;
   }
   return json(c, { error: 'No accessible HLS playlist was found' }, 502);
 });
@@ -618,7 +632,7 @@ app.get('/api/telegram-playlist/:id/:audio/:ep', async c => {
 
 app.get('/', (c) => {
   return json(c, {
-    name: "Anivexa API 2.1 (Hono Edition)",
+    name: "Anivexa API 2.2 (Hono Edition)",
     cache: _CACHE_ENABLED,
     providers: [
       "allmanga",
@@ -630,6 +644,7 @@ app.get('/', (c) => {
       "anizone",
     ],
     routes: [
+      "/metadata/:id?source=anilist|mal",
       "/map/:anilistId",
       "/episodes/:anilistId",
       "/episodes/:provider[/:provider...]/:anilistId?map=true|false",

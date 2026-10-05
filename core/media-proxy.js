@@ -1,3 +1,5 @@
+import { getRequestSignal } from './network.js';
+
 export function isPrivateAddress(address) {
   const host = address.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
   if (host === 'localhost' || /\.(localhost|local|internal|lan)$/.test(host) || host === 'metadata.google.internal') return true;
@@ -44,11 +46,13 @@ async function publicDispatcher() {
 }
 
 export async function fetchMedia(value, options = {}, env = {}) {
+  const signal = AbortSignal.any([options.signal, getRequestSignal(), AbortSignal.timeout(30000)].filter(Boolean));
+  signal.throwIfAborted();
   let url = validateMediaURL(value, env.PROXY_ALLOWED_HOSTS || globalThis.process?.env?.PROXY_ALLOWED_HOSTS || '');
   const dispatcher = await publicDispatcher();
   if (!dispatcher && (typeof WebSocketPair !== 'undefined' || typeof EdgeRuntime !== 'undefined') && !(env.PROXY_ALLOWED_HOSTS || globalThis.process?.env?.PROXY_ALLOWED_HOSTS)) throw new Error('Configure PROXY_ALLOWED_HOSTS for edge media proxying');
   for (let redirects = 0; redirects <= 5; redirects++) {
-    const response = await fetch(url, { ...options, ...(dispatcher ? { dispatcher } : {}), redirect: 'manual', signal: options.signal || AbortSignal.timeout(30000) });
+    const response = await fetch(url, { ...options, ...(dispatcher ? { dispatcher } : {}), redirect: 'manual', signal });
     if (![301, 302, 303, 307, 308].includes(response.status)) return response;
     const location = response.headers.get('location');
     await response.body?.cancel();
@@ -107,7 +111,7 @@ export async function mediaProxy(request, env = {}) {
   const referer = incoming.searchParams.get('referer') || `${target.origin}/`;
   const headers = new Headers({ 'User-Agent': 'Mozilla/5.0', Accept: '*/*', 'Accept-Encoding': 'identity', Referer: referer, Origin: new URL(referer).origin });
   for (const name of ['range', 'if-range']) if (request.headers.has(name)) headers.set(name, request.headers.get(name));
-  const response = await fetchMedia(target.href, { headers }, env);
+  const response = await fetchMedia(target.href, { headers, signal: request.signal }, env);
   const resultHeaders = new Headers({ 'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "sandbox; default-src 'none'" });
   for (const name of ['content-type', 'content-range', 'accept-ranges', 'cache-control', 'etag', 'last-modified']) if (response.headers.has(name)) resultHeaders.set(name, response.headers.get(name));
   const type = response.headers.get('content-type') || '';

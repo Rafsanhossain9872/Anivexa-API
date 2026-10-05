@@ -61,7 +61,7 @@ async function mapAnimeIds(anilistId) {
     getMedia(anilistId).catch(() => null),
     fetchAniListRelations(anilistId)
   ]);
-  const malId = arm?.myanimelist ?? null;
+  const malId = media?.idMal ?? arm?.myanimelist ?? null;
   const format = media?.format ?? null;
   const year = media?.seasonYear ?? null;
   const titleEn = media?.title?.english || null;

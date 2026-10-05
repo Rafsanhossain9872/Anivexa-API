@@ -580,12 +580,17 @@ async function handleEpisodes3(anilistId, url) {
   });
 }
 __name(handleEpisodes3, "handleEpisodes");
-async function resolveStream3(anilistId, audio, ep) {
+function selectAudioServers(links, audio) {
+  const types = audio === 'sub' ? ['sub', 's-sub'] : ['dub', 's-dub'];
+  const order = { 'HD-2': 0, 'HD-1': 1 };
+  return links.filter(server => types.includes(server.dataType) && /^https?:\/\//.test(server.dataLink || ''))
+    .sort((a, b) => (order[a.serverName] ?? 9) - (order[b.serverName] ?? 9));
+}
+
+async function resolveStream3(anilistId, audio, ep, embedOnly = false) {
   const series = await resolveSeries(anilistId);
   const title2 = series.title;
   const slug = series.animeId;
-  const order = { "HD-2": 0, "HD-1": 1 };
-  const byPrio = (arr) => arr.slice().sort((a, b) => (order[a.serverName] ?? 9) - (order[b.serverName] ?? 9));
   const [watchRes, flixRes] = await Promise.allSettled([
     fetch(`${BASE}/api/watch/${slug}/${ep}`, { headers: H }).then(async (r) => {
       const _raw = await r.text();
@@ -607,22 +612,34 @@ async function resolveStream3(anilistId, audio, ep) {
       if (!seen.has(s["$id"])) links.push(s);
     }
   }
-  const audioTypes = audio === "sub" ? ["sub", "s-sub"] : ["dub", "s-dub"];
-  const servers = byPrio(links.filter((s) => audioTypes.includes(s.dataType)));
+  const servers = selectAudioServers(links, audio);
   if (!servers.length) throw Object.assign(new Error(`No ${audio} servers for "${title2}" ep ${ep}`), { status: 404 });
+  if (embedOnly) return { title: title2, slug, watchData, stream: {}, server: servers[0].serverName, servers };
   const embedRes = await fetch(servers[0].dataLink, { headers: { ...H, Referer: `${BASE}/` } });
   if (!embedRes.ok) throw Object.assign(new Error(`Embed fetch failed: ${embedRes.status}`), { status: 502 });
   const stream = await decryptEmbed(await embedRes.text());
   return { title: title2, slug, watchData, stream, server: servers[0].serverName, servers };
 }
 __name(resolveStream3, "resolveStream");
-async function handleWatch3(anilistId, audio, epNum, origin) {
+async function handleWatch3(anilistId, audio, epNum, origin, embedOnly = false) {
   if (audio !== "sub" && audio !== "dub") return json3({ error: "audio must be sub or dub" }, 400);
   const ep = parseInt(epNum);
   if (isNaN(ep)) return json3({ error: `Invalid episode: ${epNum}` }, 400);
   let resolved;
   try {
-    resolved = await resolveStream3(anilistId, audio, ep);
+    if (embedOnly) {
+      // AniList-backed server lookup needs no title search, WASM interpretation,
+      // token fetch, or PBKDF2/AES work when the browser will use an embed.
+      const response = await fetch(`${BASE}/api/flix/${anilistId}/${ep}`, { headers: H });
+      if (response.ok) {
+        const data = await response.json();
+        const servers = selectAudioServers(data.servers || [], audio);
+        if (servers.length) resolved = { title: null, slug: null, watchData: data, stream: {}, server: servers[0].serverName, servers };
+      } else { await response.body?.cancel(); }
+    }
+  } catch { /* Fall back to the watch server list when the direct lookup is down. */ }
+  try {
+    if (!resolved) resolved = await resolveStream3(anilistId, audio, ep, embedOnly);
   } catch (e) {
     return json3({ error: 'Provider request failed' }, e.status ?? 502);
   }
@@ -635,10 +652,9 @@ async function handleWatch3(anilistId, audio, epNum, origin) {
     audio,
     server,
     stream_url: stream.url,
-    redirect_url: redirectUrl,
+    redirect_url: stream.url ? redirectUrl : undefined,
     streams: [
-      { url: stream.url, type: "hls" },
-      { url: redirectUrl, type: "hls-redirect" },
+      ...(stream.url ? [{ url: stream.url, type: "hls" }, { url: redirectUrl, type: "hls-redirect" }] : []),
       ...servers.map((s) => ({ url: s.dataLink, type: "embed", server: s.serverName }))
     ],
     subtitles: stream.subtitles,
@@ -723,7 +739,7 @@ var reanime_default = {
       m = path.match(/^\/episodes\/(\d+)$/);
       if (m) return await handleEpisodes3(m[1], url);
       m = path.match(/^\/watch\/(\d+)\/(sub|dub)\/(\d+)$/);
-      if (m) return await handleWatch3(m[1], m[2], m[3], url.origin);
+      if (m) return await handleWatch3(m[1], m[2], m[3], url.origin, url.searchParams.get('mode') === 'embed');
       m = path.match(/^\/stream\/(\d+)\/(sub|dub)\/(\d+)$/);
       if (m) return await handleStream3(m[1], m[2], m[3]);
       return json3({ error: "Not found", routes: ["GET /episodes/:anilistId", "GET /watch/:anilistId/sub|dub/:ep", "GET /stream/:anilistId/sub|dub/:ep", "GET /proxy?url=&referer="] }, 404);

@@ -1,5 +1,6 @@
 import { getMedia } from '../core/anilist.js';
 import { providerFetch as fetch } from '../core/network.js';
+import { get as cacheGet, set as cacheSet, isFresh, SHOW_IDENTITY_TTL } from '../core/smartcache.js';
 
 const ANIKOTO = "https://anikototv.to";
 const MAPPER = "https://mapper.nekostream.site/api/mal";
@@ -57,7 +58,7 @@ function scoreCandidate(cand, primaryEn, primaryRom, synonyms) {
   if (normRom && candJpNorm === normRom) score += 800;
 
   const targetText = `${primaryEn || ""} ${primaryRom || ""} ${(synonyms || []).join(" ")}`.toLowerCase();
-  
+
   for (const mod of MODIFIERS) {
     const candHasMod = candNameNorm.includes(mod) || candSlugNorm.includes(mod);
     const targetHasMod = targetText.includes(mod);
@@ -86,7 +87,7 @@ function scoreCandidate(cand, primaryEn, primaryRom, synonyms) {
 async function searchAnikoto(query) {
   const searchHtml = await httpGet(`${ANIKOTO}/filter?keyword=${encodeURIComponent(query)}`, { Referer: `${ANIKOTO}/` });
   const candidates = [];
-  
+
   const re = /<a\s+class="name d-title"\s+href="https:\/\/anikototv\.to\/watch\/([^"/]+)(?:\/ep-\d+)?"[^>]*data-jp="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g;
   let m;
   while ((m = re.exec(searchHtml)) !== null) {
@@ -112,6 +113,9 @@ async function searchAnikoto(query) {
 }
 
 async function findAnikotoShow(media) {
+  const cacheKey = media.id ? `np:anikoto:${media.id}` : null;
+  const cached = cacheKey ? cacheGet(cacheKey) : null;
+  if (isFresh(cached)) return cached.data;
   const primaryEn = media.title?.english;
   const primaryRom = media.title?.romaji;
   const synonyms = media.synonyms || [];
@@ -119,11 +123,9 @@ async function findAnikotoShow(media) {
   const keywords = [...new Set([primaryEn, primaryRom, ...synonyms].filter(Boolean))];
   const allCandidatesMap = new Map();
 
-  for (const k of keywords.slice(0, 5)) {
-    const res = await searchAnikoto(k).catch(() => []);
-    for (const c of res) {
-      allCandidatesMap.set(c.slug, c);
-    }
+  const results = await Promise.all(keywords.slice(0, 5).map(k => searchAnikoto(k).catch(() => [])));
+  for (const c of results.flat()) {
+    allCandidatesMap.set(c.slug, c);
   }
 
   const candidates = Array.from(allCandidatesMap.values());
@@ -141,7 +143,9 @@ async function findAnikotoShow(media) {
   const showIdMatch = watchHtml.match(/data-id="(\d+)"/);
   if (!showIdMatch) throw new Error(`Could not find show ID for slug: ${chosen.slug}`);
 
-  return { slug: chosen.slug, showId: showIdMatch[1], title: chosen.name };
+  const show = { slug: chosen.slug, showId: showIdMatch[1], title: chosen.name };
+  if (cacheKey) cacheSet(cacheKey, show, SHOW_IDENTITY_TTL);
+  return show;
 }
 
 function mapTrack(t, source) {
@@ -400,7 +404,7 @@ async function handleWatch(anilistId, audio, epNum, ctx = {}) {
       } catch (e) {}
     }
 
-    const extracted = await extractEmbedSource(embedUrl);
+    const extracted = ctx.fast && hlsUrl ? null : await extractEmbedSource(embedUrl);
     const itemSubs = [];
 
     if (extracted?.data?.sources?.file) {
@@ -437,6 +441,7 @@ async function handleWatch(anilistId, audio, epNum, ctx = {}) {
       if (serverIntro.start || serverIntro.end) streamObj.intro = serverIntro;
       if (serverOutro.start || serverOutro.end) streamObj.outro = serverOutro;
       streams.push(streamObj);
+      if (ctx.fast) break;
     } else {
       const streamObj = {
         url: embedUrl,
@@ -452,7 +457,7 @@ async function handleWatch(anilistId, audio, epNum, ctx = {}) {
     }
   }
 
-  for (const dl of downloadItems) {
+  for (const dl of ctx.fast ? [] : downloadItems) {
     let dlUrl = dl.url;
     if (!dlUrl && dl.linkId) {
       const resolved = await getJSON(`${ANIKOTO}/ajax/server?get=${encodeURIComponent(dl.linkId)}`, {
@@ -509,7 +514,7 @@ export default {
     }
     try {
       let m = path.match(/^\/watch\/anikoto\/(\d+)\/(sub|dub)\/anikoto-(\d+)\/?$/);
-      if (m) return await handleWatch(m[1], m[2], parseInt(m[3]));
+      if (m) return await handleWatch(m[1], m[2], parseInt(m[3]), { fast: url.searchParams.get('fast') === 'true' });
 
       m = path.match(/^\/episodes\/anikoto\/(\d+)\/?$/);
       if (m) {
